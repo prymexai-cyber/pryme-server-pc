@@ -1,9 +1,0 @@
-{
-  "name": "pryme-cloud",
-  "version": "2.0.0",
-  "private": true,
-  "description": "Pryme Server PC — always-on cloud page (Render)",
-  "main": "server.js",
-  "scripts": { "start": "node server.js" },
-  "engines": { "node": ">=18" }
-}
