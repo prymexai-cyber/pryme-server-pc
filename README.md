@@ -259,12 +259,17 @@ OFF වෙලා තියෙන server එකක් on කරන්න **ගෙ
 - **පරණ Android phone එකක් (charger එකේ):** F-Droid එකෙන් **Termux** දාලා Settings එකේ පෙන්නන commands 3 run කරන්න. Termux එකට battery optimisation off කරන්න.
 - ඊට පස්සේ Pryme Cloud එකේ **Power On** ඔබාම → Waker → Wake-on-LAN → server එක on ✅ (ලෝකයේ කොහේ ඉඳන් වුණත්)
 
-## 13. ☁️ Cloud Backup (Google Drive · OneDrive · iCloud)
+## 13. ☁️ Cloud Backup (Google Drive · Google Photos · OneDrive · iCloud)
 Pryme → **Cloud** tab:
 1. **Connect** → Google / Microsoft sign-in tab එකක් open වෙනවා → **Allow** → ඊට පස්සේ tab එකේ *"This site can't be reached"* පේනවා (**ඒක normal**) → ඒ tab එකේ address එක (`http://127.0.0.1:53682/...`) copy කරලා Pryme එකේ paste කරලා **Finish**.
 2. **iCloud:** iPhone → Settings → [name] → iCloud → **Advanced Data Protection OFF**, **Access iCloud Data on the Web ON** → Pryme එකේ Apple ID + password → iPhone එකට එන code එක. (Apple දින 30කට වතාවක් ආයේ sign in ඉල්ලනවා.)
 3. **New backup** → ඕන folders/files tick කරන්න → drive එක → *Every day / Every week / Manual* → **Save & run now**.
 - Files යන්නේ cloud → server (`<drive>/Cloud Backup/<account>/`). Cloud එකේ කිසිවක් මැකෙන්නේ නෑ. iCloud Photos backup එක Pryme **Photos** tab එකෙත් පේනවා.
+4. **Google Photos:** 2025 මාර්තු ඉඳන් Google කිසිම app එකකට මුළු Photos library එක කෙලින්ම කියවන්න දෙන්නේ නෑ. ඒ නිසා Pryme පාවිච්චි කරන්නේ Google එකේම **Google Takeout** එක.
+   - මුලින් Google Drive connect කරන්න.
+   - [takeout.google.com](https://takeout.google.com) → **Deselect all** → **Google Photos** විතරක් tick කරන්න → **Next step**.
+   - **Add to Drive** · **Export every 2 months for 1 year** · **.zip** · **50 GB** → **Create export**.
+   - Pryme → Google Photos card → **Back up**. Pryme එක Drive එකේ `Takeout` folder එකෙන් zip files download කරලා unzip කරලා `Cloud Backup/Google Photos/<album>/` වලට දානවා. කලින් import කරපු exports ආයේ download කරන්නේ නෑ.
 
 ---
 
