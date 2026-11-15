@@ -630,7 +630,7 @@ $('#dirInput').onchange = e => { queueUploads([...e.target.files].map(f => ({ fi
 function queueUploads(items, dest) {
   if (S.cloudMode) return fastModal('Uploading');
   if (dest === '/') return toast('Open a drive first, then upload', 'err');
-  for (const it of items) S.uploads.unshift({ id: Math.random().toString(36).slice(2), file: it.file, name: it.name, dest, loaded: 0, total: it.file.size, status: 'queued', speed: 0 });
+  for (const it of items) S.uploads.unshift({ id: Math.random().toString(36).slice(2), file: it.file, name: it.name, dest, after: it.after, loaded: 0, total: it.file.size, status: 'queued', speed: 0 });
   toast(`Uploading ${items.length} file(s)…`); pumpUploads(); renderUploads();
 }
 function pumpUploads() {
@@ -648,7 +648,7 @@ function startUpload(u) {
     throttleRenderUploads();
   };
   x.onload = () => {
-    if (x.status < 300) { u.status = 'done'; u.loaded = u.total; }
+    if (x.status < 300) { u.status = 'done'; u.loaded = u.total; if (u.after === 'unzip') { u.status = 'uploading'; u.info = 'Unpacking…'; cloudCall('importZip', { path: u.dest + '/' + u.name }).then(() => { u.status = 'done'; toast(u.name + ' unpacked into Google Photos', 'ok'); }, e => { u.status = 'error'; u.error = e.message; }).finally(() => { u.info = null; renderUploads(); }); } }
     else { u.status = 'error'; try { u.error = JSON.parse(x.responseText).error; } catch { u.error = 'Failed (' + x.status + ')'; } }
     finish();
   };
@@ -668,7 +668,7 @@ function renderUploads() {
   if (!S.uploads.length) { el.innerHTML = `<div class="tempty">No uploads yet. Go to Files → Upload, or drag &amp; drop.</div>`; return; }
   el.innerHTML = S.uploads.slice(0, 150).map(u => {
     const pct = u.total ? Math.round(u.loaded / u.total * 100) : 100;
-    const info = u.status === 'uploading' ? `${fmtBytes(u.loaded)} / ${fmtBytes(u.total)} · ${fmtRate(u.speed)}` : u.status === 'error' ? esc(u.error) : `${fmtBytes(u.total)} → ${esc(u.dest)}`;
+    const info = u.info ? u.info : u.status === 'uploading' ? `${fmtBytes(u.loaded)} / ${fmtBytes(u.total)} · ${fmtRate(u.speed)}` : u.status === 'error' ? esc(u.error) : `${fmtBytes(u.total)} → ${esc(u.dest)}`;
     return `<div class="titem">${fileIcon({ name: u.name })}<div style="min-width:0"><b title="${esc(u.name)}">${esc(u.name)}</b><div class="bar"><i style="width:${pct}%"></i></div><small>${info}</small></div>
       <div>${u.status === 'uploading' || u.status === 'queued' ? `<button class="btn sm" data-cancel="${u.id}">Cancel</button>` : `<span class="st ${u.status}">${u.status === 'done' ? 'Done' : u.status === 'error' ? 'Failed' : 'Cancelled'}</span>`}</div></div>`;
   }).join('');
@@ -684,7 +684,11 @@ filesCard.addEventListener('dragover', e => { if (S.path !== '/' && S.phase === 
 filesCard.addEventListener('dragleave', () => { if (--dragN <= 0) { dragN = 0; $('#drop').classList.remove('on'); } });
 filesCard.addEventListener('drop', async e => {
   e.preventDefault(); dragN = 0; $('#drop').classList.remove('on');
-  const dest = S.path, items = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  const dest = S.path, out = await dropItems(e);
+  if (out.length) queueUploads(out, dest);
+});
+async function dropItems(e) {
+  const items = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
   const out = [];
   async function walk(entry, prefix) {
     if (entry.isFile) { const f = await new Promise((ok, bad) => entry.file(ok, bad)); out.push({ file: f, name: prefix + f.name }); }
@@ -694,8 +698,17 @@ filesCard.addEventListener('drop', async e => {
     }
   }
   if (items.length) { for (const it of items) await walk(it, ''); } else out.push(...[...e.dataTransfer.files].map(f => ({ file: f, name: f.name })));
-  if (out.length) queueUploads(out, dest);
-});
+  return out;
+}
+// Google Photos drop box: files go to <drive>/Cloud Backup/Google Photos/Imported <date>/, .zip files are unpacked there
+function gpImport(items, drive) {
+  if (!items.length) return;
+  if (S.cloudMode) return fastModal('Uploading');
+  const d = new Date(), day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const dest = `/${drive}/Cloud Backup/Google Photos/Imported ${day}`;
+  for (const it of items) if (/\.(zip|tgz)$/i.test(it.name)) it.after = 'unzip';
+  queueUploads(items, dest);
+}
 
 /* ---------------- Jobs (server -> this PC) ---------------- */
 let jobsBusy = false;
@@ -992,6 +1005,20 @@ function renderCloud() {
       <div class="row-gap">${a.via ? (a.connected ? `<button class="btn sm primary" data-newfrom="${a.id}">${ico('cloud')}Back up</button><button class="btn sm" data-gph>How it works</button>` : `<button class="btn sm primary" data-gph>Connect</button>`)
         : a.connected ? `<button class="btn sm primary" data-newfrom="${a.id}">${ico('cloud')}Back up</button><button class="btn sm" data-disc="${a.id}">Disconnect</button>` : `<button class="btn sm primary" data-conn="${a.id}" ${icl ? 'disabled' : ''}>Connect</button>`}</div></div>`;
   }).join('');
+  if (c.drives.length) {
+    $('#cbAccounts').insertAdjacentHTML('beforeend', `<div class="tile gp-drop" id="gpDrop"><span class="acc-logo" style="background:${ACC.gphotos.bg}">${ACC.gphotos.logo}</span>
+      <div class="gp-txt"><strong class="gp-t">Drop Google Photos here</strong><span class="sub">Drag photos, videos, folders or a Google Photos <b>.zip</b> onto this box — or choose them. On a phone, <b>Choose</b> opens your gallery and Google Photos.</span></div>
+      <div class="row-gap"><select id="gpDrive" class="sm-sel">${c.drives.map(d => `<option>${esc(d)}</option>`).join('')}</select><button class="btn sm primary" id="gpPick">${ico('upload')}Choose</button></div>
+      <input type="file" id="gpFiles" multiple accept="image/*,video/*,.zip,.heic,.heif" hidden></div>`);
+    const box = $('#gpDrop'); let n = 0;
+    const go = items => gpImport(items, $('#gpDrive').value);
+    $('#gpPick').onclick = () => $('#gpFiles').click();
+    $('#gpFiles').onchange = e => { go([...e.target.files].map(f => ({ file: f, name: f.name }))); e.target.value = ''; };
+    box.addEventListener('dragenter', e => { if (!e.dataTransfer.types.includes('Files')) return; e.preventDefault(); n++; box.classList.add('on'); });
+    box.addEventListener('dragover', e => e.preventDefault());
+    box.addEventListener('dragleave', () => { if (--n <= 0) { n = 0; box.classList.remove('on'); } });
+    box.addEventListener('drop', async e => { e.preventDefault(); n = 0; box.classList.remove('on'); go(await dropItems(e)); });
+  }
   $$('[data-conn]').forEach(b => (b.onclick = () => connectAcc(b.dataset.conn)));
   $$('[data-gph]').forEach(b => (b.onclick = gphotosGuide));
   $$('[data-gpold]').forEach(b => (b.onclick = () => sheet(`<div class="sheet-h"><h3>Google Photos</h3><button class="icon-btn" data-close>${ico('x')}</button></div><div class="sheet-b"><p style="margin-top:0">Your server runs an older Pryme version without Google Photos. Update it once — on the server run:</p><div class="code">cd ~/pryme-server-pc && git pull\nsudo bash server-agent/install.sh\nsudo reboot</div><p class="muted small">After the reboot, open Cloud again and press Connect on Google Photos.</p></div><div class="sheet-f"><button class="btn" data-close>OK</button></div>`)));
