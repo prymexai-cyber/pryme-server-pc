@@ -10,7 +10,7 @@ DESK_USER="${SUDO_USER:-$(logname 2>/dev/null || echo '')}"
 
 echo "==> Installing packages..."
 apt-get update -y
-apt-get install -y nodejs ffmpeg ethtool ntfs-3g exfatprogs curl xdotool openssh-server zip avahi-daemon
+apt-get install -y nodejs ffmpeg ethtool ntfs-3g exfatprogs curl xdotool openssh-server zip unzip avahi-daemon
 
 # rclone (cloud backup: Google Drive / OneDrive / iCloud). iCloud needs rclone 1.69+
 RCV=$(rclone version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 | awk -F. '{print $1*100+$2}')
