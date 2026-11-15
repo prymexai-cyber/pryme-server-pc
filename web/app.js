@@ -495,7 +495,7 @@ const CAT = [
 ];
 const extOf = n => (n.lastIndexOf('.') > 0 ? n.slice(n.lastIndexOf('.') + 1).toLowerCase() : '');
 function fileIcon(e) {
-  if (e.dir) return `<div class="ficon" style="background:linear-gradient(135deg,#f3d27a,#b8862b)">${ico('files')}</div>`;
+  if (e.dir) return `<div class="ficon" style="background:linear-gradient(135deg,#dcfce7,#4ade80 45%,#16a34a)">${ico('files')}</div>`;
   const x = extOf(e.name), c = CAT.find(([r]) => r.test(x));
   return `<div class="ficon" style="background:${c ? c[1] : '#94a3b8'}">${esc((x || 'file').slice(0, 4))}</div>`;
 }
@@ -984,7 +984,9 @@ function renderCloud() {
   const c = S.cb; if (!c) return;
   $('#cbVer').textContent = c.rclone ? `rclone v${c.rclone}` : '';
   if (!c.rclone) { $('#cbAccounts').innerHTML = `<div class="empty-sm">Cloud backup needs <b>rclone</b>. On the server run <code>sudo bash ~/pryme-server-pc/server-agent/install.sh</code></div>`; $('#cbJobs').innerHTML = ''; return; }
-  $('#cbAccounts').innerHTML = c.accounts.map(a => {
+  const accs = c.accounts.some(a => a.id === 'gphotos') ? c.accounts : [...c.accounts.slice(0, 1), { id: 'gphotos', label: 'Google Photos', connected: false, old: true }, ...c.accounts.slice(1)];
+  $('#cbAccounts').innerHTML = accs.map(a => {
+    if (a.old) return `<div class="tile acc"><div class="acc-h"><span class="acc-logo" style="background:${ACC.gphotos.bg}">${ACC.gphotos.logo}</span><div><b>Google Photos</b><span class="sub">Update your server to turn this on</span></div></div><div class="row-gap"><button class="btn sm primary" data-gpold>Connect</button></div></div>`;
     const k = ACC[a.id], icl = a.id.startsWith('icloud') && !c.icloud;
     return `<div class="tile acc"><div class="acc-h"><span class="acc-logo" style="background:${k.bg}">${k.logo}</span><div><b>${esc(a.label)}</b><span class="sub">${a.connected ? '<span class="ok-txt">● Connected</span>' : icl ? 'Needs a newer rclone (re-run install.sh)' : k.note}</span></div></div>
       <div class="row-gap">${a.via ? (a.connected ? `<button class="btn sm primary" data-newfrom="${a.id}">${ico('cloud')}Back up</button><button class="btn sm" data-gph>How it works</button>` : `<button class="btn sm primary" data-gph>Connect</button>`)
@@ -992,6 +994,7 @@ function renderCloud() {
   }).join('');
   $$('[data-conn]').forEach(b => (b.onclick = () => connectAcc(b.dataset.conn)));
   $$('[data-gph]').forEach(b => (b.onclick = gphotosGuide));
+  $$('[data-gpold]').forEach(b => (b.onclick = () => sheet(`<div class="sheet-h"><h3>Google Photos</h3><button class="icon-btn" data-close>${ico('x')}</button></div><div class="sheet-b"><p style="margin-top:0">Your server runs an older Pryme version without Google Photos. Update it once — on the server run:</p><div class="code">cd ~/pryme-server-pc && git pull\nsudo bash server-agent/install.sh\nsudo reboot</div><p class="muted small">After the reboot, open Cloud again and press Connect on Google Photos.</p></div><div class="sheet-f"><button class="btn" data-close>OK</button></div>`)));
   $$('[data-disc]').forEach(b => (b.onclick = async () => { if (!(await modal({ title: 'Disconnect this account?', text: 'Backups already on the server stay. Backup jobs for it stop working until you connect again.', ok: 'Disconnect', danger: true }))) return; try { await cloudCall('disconnect', { id: b.dataset.disc }); loadCloud(); } catch (e) { toast(e.message, 'err'); } }));
   $$('[data-newfrom]').forEach(b => (b.onclick = () => jobWizard({ remote: b.dataset.newfrom })));
   const jobs = c.jobs;
