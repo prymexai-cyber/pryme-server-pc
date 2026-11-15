@@ -85,7 +85,7 @@ const PHASE = {
 const TITLES = {
   home: ['Home', 'Overview & power control'], files: ['Files', 'All drives on your server'], live: ['Live Screen', 'See your server screen in real time'],
   transfers: ['Transfers', 'Uploads and copies to this PC'], settings: ['Settings', 'Theme, connections and account'],
-  photos: ['Photos', 'Every photo on your server, newest first'], cloud: ['Cloud Backup', 'Back up Google Drive, OneDrive and iCloud to your server'], trash: ['Trash', 'Restore deleted files'],
+  photos: ['Photos', 'Every photo on your server, newest first'], cloud: ['Cloud Backup', 'Back up Google Drive, Google Photos, OneDrive and iCloud to your server'], trash: ['Trash', 'Restore deleted files'],
 };
 
 /* ---------------- Auth screens ---------------- */
@@ -495,7 +495,7 @@ const CAT = [
 ];
 const extOf = n => (n.lastIndexOf('.') > 0 ? n.slice(n.lastIndexOf('.') + 1).toLowerCase() : '');
 function fileIcon(e) {
-  if (e.dir) return `<div class="ficon" style="background:linear-gradient(135deg,#7b6cff,#22c3ee)">${ico('files')}</div>`;
+  if (e.dir) return `<div class="ficon" style="background:linear-gradient(135deg,#f3d27a,#b8862b)">${ico('files')}</div>`;
   const x = extOf(e.name), c = CAT.find(([r]) => r.test(x));
   return `<div class="ficon" style="background:${c ? c[1] : '#94a3b8'}">${esc((x || 'file').slice(0, 4))}</div>`;
 }
@@ -969,6 +969,7 @@ const ACC = {
   onedrive: { logo: '☁', bg: 'linear-gradient(135deg,#0364b8,#28a8ea)', note: 'Sign in with Microsoft.' },
   icloud: { logo: '☁', bg: 'linear-gradient(135deg,#3a3a3c,#8e8e93)', note: 'Apple ID + 2-factor code.' },
   icloudphotos: { logo: '❀', bg: 'linear-gradient(135deg,#ff9f0a,#ff375f 50%,#bf5af2)', note: 'Apple ID + 2-factor code.' },
+  gphotos: { logo: '✿', bg: 'conic-gradient(from 45deg,#ea4335,#fbbc04,#34a853,#4285f4,#ea4335)', note: 'Through Google Takeout + your Google Drive.' },
 };
 let cbBusy = false;
 async function cloudCall(action, extra) { return post('/api/cloud', { action, ...(extra || {}) }); }
@@ -986,9 +987,11 @@ function renderCloud() {
   $('#cbAccounts').innerHTML = c.accounts.map(a => {
     const k = ACC[a.id], icl = a.id.startsWith('icloud') && !c.icloud;
     return `<div class="tile acc"><div class="acc-h"><span class="acc-logo" style="background:${k.bg}">${k.logo}</span><div><b>${esc(a.label)}</b><span class="sub">${a.connected ? '<span class="ok-txt">● Connected</span>' : icl ? 'Needs a newer rclone (re-run install.sh)' : k.note}</span></div></div>
-      <div class="row-gap">${a.connected ? `<button class="btn sm primary" data-newfrom="${a.id}">${ico('cloud')}Back up</button><button class="btn sm" data-disc="${a.id}">Disconnect</button>` : `<button class="btn sm primary" data-conn="${a.id}" ${icl ? 'disabled' : ''}>Connect</button>`}</div></div>`;
+      <div class="row-gap">${a.via ? (a.connected ? `<button class="btn sm primary" data-newfrom="${a.id}">${ico('cloud')}Back up</button><button class="btn sm" data-gph>How it works</button>` : `<button class="btn sm primary" data-gph>Connect</button>`)
+        : a.connected ? `<button class="btn sm primary" data-newfrom="${a.id}">${ico('cloud')}Back up</button><button class="btn sm" data-disc="${a.id}">Disconnect</button>` : `<button class="btn sm primary" data-conn="${a.id}" ${icl ? 'disabled' : ''}>Connect</button>`}</div></div>`;
   }).join('');
   $$('[data-conn]').forEach(b => (b.onclick = () => connectAcc(b.dataset.conn)));
+  $$('[data-gph]').forEach(b => (b.onclick = gphotosGuide));
   $$('[data-disc]').forEach(b => (b.onclick = async () => { if (!(await modal({ title: 'Disconnect this account?', text: 'Backups already on the server stay. Backup jobs for it stop working until you connect again.', ok: 'Disconnect', danger: true }))) return; try { await cloudCall('disconnect', { id: b.dataset.disc }); loadCloud(); } catch (e) { toast(e.message, 'err'); } }));
   $$('[data-newfrom]').forEach(b => (b.onclick = () => jobWizard({ remote: b.dataset.newfrom })));
   const jobs = c.jobs;
@@ -998,7 +1001,7 @@ function renderCloud() {
     const last = r ? `Backing up… ${fmtBytes(r.bytes)}${r.total ? ' / ' + fmtBytes(r.total) : ''} · ${r.files}${r.totalFiles ? '/' + r.totalFiles : ''} files · ${fmtRate(r.speed)}`
       : j.last ? `${j.last.ok ? '✓' : '✗'} ${fmtDate(j.last.at)} · ${fmtBytes(j.last.bytes || 0)} · ${esc(j.last.msg)}` : 'Not run yet';
     return `<div class="tile job"><span class="acc-logo" style="background:${k.bg || 'var(--tile2)'}">${k.logo || '☁'}</span>
-      <div style="min-width:0"><b>${esc(j.name)}</b><span class="sub">${esc(j.items.map(i => i.path || '(everything)').join(', '))} → ${esc(j.drive)}/Cloud Backup · ${when}</span>
+      <div style="min-width:0"><b>${esc(j.name)}</b><span class="sub">${ACC[j.remote] && j.remote === 'gphotos' ? 'All photos &amp; videos (Google Takeout)' : esc(j.items.map(i => i.path || '(everything)').join(', '))} → ${esc(j.drive)}/Cloud Backup · ${when}</span>
       ${r ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ''}<span class="sub">${last}</span></div>
       <div class="row-gap">${r ? `<button class="btn sm" data-stop="${j.id}">Stop</button>` : `<button class="btn sm primary" data-run="${j.id}">Run now</button>`}<button class="btn sm" data-edit="${j.id}">Edit</button><button class="btn sm danger" data-del="${j.id}">${ico('trash')}</button></div></div>`;
   }).join('') : `<div class="empty-sm">No backups yet. Connect an account, then press <b>New backup</b>.</div>`;
@@ -1060,6 +1063,22 @@ async function connectAcc(id) {
     catch (e) { $('#oaErr').textContent = e.message; b.disabled = false; b.textContent = 'Finish'; }
   };
 }
+function gphotosGuide() {
+  const g = S.cb.accounts.find(a => a.id === 'gdrive'), on = g && g.connected, gp = S.cb.accounts.find(a => a.id === 'gphotos');
+  sheet(`<div class="sheet-h"><h3>Back up Google Photos</h3><button class="icon-btn" data-close>${ico('x')}</button></div><div class="sheet-b">
+    <div class="note">Since March 2025 Google lets no app read your whole Photos library directly. The official way is <b>Google Takeout</b>: Google packs your photos into your Google Drive every 2 months, and Pryme downloads and unpacks them automatically.</div>
+    <ol class="steps">
+      <li><b>Connect Google Drive.</b> ${on ? '<span class="ok-txt">● Connected</span>' : `<br><button class="btn primary sm" id="gpDrive" style="margin-top:8px">Connect Google Drive</button>`}</li>
+      <li><b>Open Google Takeout</b> with the same Google account.<br><a class="btn sm" href="https://takeout.google.com/" target="_blank" rel="noopener" style="margin-top:8px">${ico('open')}Open takeout.google.com</a></li>
+      <li>Press <b>Deselect all</b>, then tick only <b>Google Photos</b> → <b>Next step</b>.</li>
+      <li>Set <b>Transfer to: Add to Drive</b> · <b>Frequency: Export every 2 months for 1 year</b> · <b>File type: .zip</b> · <b>Size: 50 GB</b> → <b>Create export</b>.</li>
+      <li>Google emails you when it is ready (a few hours to a day). Then press <b>Back up</b> on the Google Photos card here (or let the schedule run). Pryme unpacks the photos into <code>Cloud Backup/Google Photos</code>, album by album, and skips exports it already imported.</li>
+    </ol>
+    <p class="muted small">Tip: after Pryme has imported an export you can delete the <b>Takeout</b> files from Google Drive to free space.</p></div>
+    <div class="sheet-f"><button class="btn" data-close>Close</button>${on ? `<button class="btn primary" id="gpNew">${ico('cloud')}Set up backup</button>` : ''}</div>`);
+  const d = $('#gpDrive'); if (d) d.onclick = () => { closeSheet(); connectAcc('gdrive'); };
+  const n = $('#gpNew'); if (n) n.onclick = () => { closeSheet(); const ex = S.cb.jobs.find(j => j.remote === 'gphotos'); jobWizard(ex || { remote: 'gphotos', name: 'Google Photos' }); };
+}
 async function jobWizard(job) {
   const c = S.cb, conn = c.accounts.filter(a => a.connected);
   const j = { name: '', items: [], drive: c.drives[0], schedule: 'daily', hour: 2, ...job };
@@ -1069,10 +1088,11 @@ async function jobWizard(job) {
   sheet(`<div class="sheet-h"><h3>${job.id ? 'Edit backup' : 'New backup'}</h3><button class="icon-btn" data-close>${ico('x')}</button></div><div class="sheet-b">
     <div class="form-row"><label class="field"><span>Account</span><select id="wzAcc">${conn.map(a => `<option value="${a.id}" ${a.id === j.remote ? 'selected' : ''}>${esc(a.label)}</option>`).join('')}</select></label>
     <label class="field"><span>Name</span><input id="wzName" value="${esc(j.name)}" placeholder="e.g. My photos"></label></div>
-    <span class="lbl">Choose what to back up — tick folders or files, click a folder to open it</span>
+    <div id="wzPick"><span class="lbl">Choose what to back up — tick folders or files, click a folder to open it</span>
     <nav class="crumbs" id="wzCrumbs" style="margin-top:8px"></nav>
     <div class="pick-list" id="wzList"></div>
-    <div class="chips" id="wzChips"></div>
+    <div class="chips" id="wzChips"></div></div>
+    <div class="note hidden" id="wzTk" style="margin:12px 0">Backs up <b>all your Google Photos</b> from the Google Takeout exports in your Google Drive. <a href="#" id="wzTkHow">How it works</a></div>
     <div class="form-row"><label class="field"><span>Save on drive</span><select id="wzDrive">${c.drives.map(d => `<option ${d === j.drive ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></label>
     <label class="field"><span>When</span><select id="wzWhen"><option value="daily">Every day</option><option value="weekly">Every week</option><option value="manual">Only when I press Run</option></select></label></div>
     <label class="field" id="wzHourWrap"><span>Time (if the server is off then, it runs as soon as it is on)</span><select id="wzHour">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === j.hour ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('')}</select></label>
@@ -1095,16 +1115,19 @@ async function jobWizard(job) {
       row.onclick = () => { if (dir && fp !== '' ) open(fp); else { const cb = $('input', row); cb.checked = !cb.checked; cb.checked ? sel.set(fp, { path: fp, dir }) : sel.delete(fp); chips(); } };
     });
   }
-  $('#wzAcc').onchange = () => { sel.clear(); chips(); open(''); };
+  const tk = () => $('#wzAcc').value === 'gphotos';
+  const mode = () => { $('#wzPick').classList.toggle('hidden', tk()); $('#wzTk').classList.toggle('hidden', !tk()); if (!tk()) open(cur); };
+  $('#wzTkHow').onclick = ev => { ev.preventDefault(); gphotosGuide(); };
+  $('#wzAcc').onchange = () => { sel.clear(); chips(); cur = ''; mode(); };
   const save = async runNow => {
     $('#wzErr').textContent = '';
     try {
-      await cloudCall('jobSave', { runNow, job: { id: job.id, remote: $('#wzAcc').value, name: $('#wzName').value.trim(), items: [...sel.values()], drive: $('#wzDrive').value, schedule: $('#wzWhen').value, hour: Number($('#wzHour').value) } });
+      await cloudCall('jobSave', { runNow, job: { id: job.id, remote: $('#wzAcc').value, name: $('#wzName').value.trim(), items: tk() ? [{ path: 'Takeout', dir: true }] : [...sel.values()], drive: $('#wzDrive').value, schedule: $('#wzWhen').value, hour: Number($('#wzHour').value) } });
       closeSheet(); toast(runNow ? 'Backup saved — running now' : 'Backup saved', 'ok'); loadCloud();
     } catch (e) { $('#wzErr').textContent = e.message; }
   };
   $('#wzSave').onclick = () => save(false); $('#wzSaveRun').onclick = () => save(true);
-  chips(); open('');
+  chips(); if (tk()) mode(); else open('');
 }
 
 /* ---------------- mobile "More" menu ---------------- */
