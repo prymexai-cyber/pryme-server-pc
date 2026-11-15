@@ -483,3 +483,8 @@ input[type=checkbox]{width:17px;height:17px;accent-color:var(--accent);cursor:po
 @media (min-width:901px){.nav button.active{background:var(--grad);color:var(--on-gold)}} .rail-btn:hover{color:var(--accent)}
 .boot-logo{filter:drop-shadow(0 10px 30px rgba(212,168,69,.35))}
 a.btn{color:var(--text)} a.btn.primary{color:var(--on-gold)}
+.gp-drop{grid-column:1/-1;display:flex;align-items:center;gap:16px;padding:18px 20px;border:1.5px dashed var(--border2);transition:border-color .15s,background .15s}
+.gp-drop.on{border-color:var(--accent);background:var(--sel)}
+.gp-drop .gp-txt{flex:1;min-width:0} .gp-drop .gp-t{display:block;font-size:15px} .gp-drop .sub{display:block;color:var(--muted);font-size:12.5px;margin-top:2px}
+.sm-sel{height:32px;border-radius:10px;border:1px solid var(--border2);background:var(--tile2);padding:0 8px;max-width:150px}
+@media (max-width:700px){.gp-drop{flex-wrap:wrap}.gp-drop>.acc-logo{display:none}.gp-drop .row-gap{width:100%}.gp-drop .row-gap .btn{flex:1;justify-content:center}.sm-sel{flex:1;max-width:none}}
