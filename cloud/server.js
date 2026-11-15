@@ -15,7 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const VERSION = '3.0.0';
+const VERSION = '3.1.0';
 const E = process.env;
 const PORT = Number(E.PORT) || 10000;
 const USER = E.PRYME_USERNAME || '';
@@ -72,6 +72,18 @@ function rpc(op, args = {}, timeout = 20000) {
     agent.queue.push({ id, op, args }); flush();
   });
 }
+
+/* ---------------- Pryme Waker (an always-on device at home sends Wake-on-LAN) ---------------- */
+const waker = { last: 0, name: null, waiting: null, queue: [], mac: null };
+const wakerOnline = () => Date.now() - waker.last < 45000 || !!waker.waiting;
+const wakerToken = () => crypto.createHmac('sha256', SECRET).update('pryme-waker').digest('hex');
+const knownMac = () => (agent.info && agent.info.mac) || E.SERVER_MAC || waker.mac || null;
+function wakerFlush() {
+  if (!waker.waiting || !waker.queue.length) return;
+  const { res, timer } = waker.waiting; waker.waiting = null; clearTimeout(timer);
+  json(res, 200, { cmds: waker.queue.splice(0), mac: knownMac() });
+}
+function wakeViaWaker() { waker.queue = [{ op: 'wake', mac: knownMac(), bcast: agent.info && agent.info.bcast }]; wakerFlush(); }
 
 /* ---------------- power state ---------------- */
 const st = { wakeAt: 0, cmd: null, cmdAt: 0, sawOffline: false, cutTimer: null };
@@ -205,6 +217,38 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === '/healthz') return json(res, 200, { ok: true });
 
+    /* Pryme Waker */
+    if (p === '/waker.ps1' || p === '/waker.js') {
+      fs.readFile(path.join(__dirname, 'waker', p.slice(1)), 'utf8', (e, t) => {
+        if (e) return json(res, 404, { error: 'Not found' });
+        const host = 'https://' + String(req.headers['x-forwarded-host'] || req.headers.host || '').replace(/[^\w.:-]/g, '');
+        const body = Buffer.from(t.split('__PRYME_URL__').join(host));
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="pryme-${p.slice(1)}"`, 'Content-Length': body.length, 'Cache-Control': 'no-store' });
+        res.end(body);
+      });
+      return;
+    }
+    if (p === '/waker/pair' && M === 'POST') {
+      const ip = ipOf(req);
+      if (blocked(ip)) return json(res, 429, { error: 'Too many tries. Wait 15 minutes.' });
+      const b = await readBody(req);
+      if (USER && PASS && safeEq(b.username || '', USER) && safeEq(b.password || '', PASS)) { fails.delete(ip); waker.name = String(b.name || 'Waker').slice(0, 40); return json(res, 200, { ok: true, token: wakerToken(), mac: knownMac() }); }
+      const f = fails.get(ip) || { n: 0, t: Date.now() }; f.n++; f.t = Date.now(); fails.set(ip, f);
+      await sleep(900); return json(res, 401, { error: 'Wrong username or password' });
+    }
+    if (p === '/waker/poll' && M === 'POST') {
+      if (!safeEq(req.headers['x-waker-token'] || '', wakerToken())) return json(res, 401, { error: 'Not paired — run the waker setup again' });
+      const b = await readBody(req);
+      waker.last = Date.now(); waker.name = String(b.name || waker.name || 'Waker').slice(0, 40);
+      if (b.mac && /^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i.test(b.mac)) waker.mac = b.mac;
+      if (waker.waiting) { const w = waker.waiting; waker.waiting = null; clearTimeout(w.timer); json(w.res, 200, { cmds: [], mac: knownMac() }); }
+      if (waker.queue.length) return json(res, 200, { cmds: waker.queue.splice(0), mac: knownMac() });
+      const timer = setTimeout(() => { if (waker.waiting && waker.waiting.res === res) { waker.waiting = null; waker.last = Date.now(); json(res, 200, { cmds: [], mac: knownMac() }); } }, 25000);
+      waker.waiting = { res, timer };
+      res.on('close', () => { if (waker.waiting && waker.waiting.res === res) { clearTimeout(timer); waker.waiting = null; } });
+      return;
+    }
+
     /* agent side */
     if (p.startsWith('/agent/')) {
       if (!AGENT_KEY || !safeEq(req.headers['x-agent-key'] || '', AGENT_KEY)) return json(res, 401, { error: 'Bad agent key' });
@@ -240,7 +284,8 @@ const server = http.createServer(async (req, res) => {
         user: USER, phase: phase(), online: online(),
         server: { name: i.name || 'Pryme Server PC', ip: i.ip, mac: i.mac, port: 80 },
         lanUrl: i.lanUrl || null, mdnsUrl: i.mdnsUrl || null, desktop: !!i.desktop,
-        plugType: PT, canWake: PT !== 'none', canWol: !!((agent.info && agent.info.mac) || E.SERVER_MAC), plugCut: E.PLUG_CUT_AFTER_SHUTDOWN === '1', activeJobs: 0,
+        waker: { online: wakerOnline(), name: waker.name },
+        plugType: PT, canWake: PT !== 'none' || wakerOnline(), canWol: !!((agent.info && agent.info.mac) || E.SERVER_MAC), plugCut: E.PLUG_CUT_AFTER_SHUTDOWN === '1', activeJobs: 0,
       });
       return json(res, 200, out);
     }
@@ -261,10 +306,15 @@ const server = http.createServer(async (req, res) => {
     if (p === '/local/logout' && M === 'POST') return json(res, 200, { ok: true }, { 'Set-Cookie': 'pryme_cloud=; Path=/; Max-Age=0; Secure' });
     if (p === '/local/wake' && M === 'POST') {
       if (online()) return json(res, 200, { ok: true, already: true });
-      if (PT === 'none') return json(res, 400, { error: 'No smart plug set up in Render (PLUG_TYPE)', noPlug: true });
-      const how = await plug(true);
+      const via = []; let how = 'none', plugErr = null;
+      if (wakerOnline()) {
+        if (!knownMac()) return json(res, 409, { error: 'Pryme does not know the server MAC yet — turn the server on once by hand, or set SERVER_MAC in Render' });
+        wakeViaWaker(); via.push('waker');
+      }
+      if (PT !== 'none') { try { how = await plug(true); via.push(how); } catch (e) { plugErr = e.message; } }
+      if (!via.length) return json(res, 400, { error: plugErr || 'No Pryme Waker or smart plug is set up', noPlug: true });
       st.wakeAt = Date.now(); st.cmd = null; clearTimeout(st.cutTimer);
-      return json(res, 200, { ok: true, how, openUrl: how === 'browser' ? E.PLUG_ON_URL : undefined });
+      return json(res, 200, { ok: true, how, via, waker: via.includes('waker') ? waker.name : null, plugErr, openUrl: how === 'browser' ? E.PLUG_ON_URL : undefined });
     }
     if (p === '/local/plug' && M === 'POST') {
       const b = await readBody(req);
@@ -287,6 +337,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/screen/status') return json(res, 200, await rpc('screenStatus'));
     if (p === '/api/health') return json(res, 200, await rpc('health', {}, 40000));
     if (p === '/api/trash') return json(res, 200, await rpc('trash'));
+    if (p === '/api/cloud' && M === 'POST') return json(res, 200, await rpc('cloud', await readBody(req), 150000));
     if (p === '/api/screen/snap') {
       const d = await rpc('snap', {}, 15000);
       const img = Buffer.from(d.jpeg, 'base64');
