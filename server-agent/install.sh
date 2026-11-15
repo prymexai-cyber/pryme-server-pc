@@ -12,6 +12,14 @@ echo "==> Installing packages..."
 apt-get update -y
 apt-get install -y nodejs ffmpeg ethtool ntfs-3g exfatprogs curl xdotool openssh-server zip avahi-daemon
 
+# rclone (cloud backup: Google Drive / OneDrive / iCloud). iCloud needs rclone 1.69+
+RCV=$(rclone version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 | awk -F. '{print $1*100+$2}')
+if [ -z "$RCV" ] || [ "$RCV" -lt 169 ]; then
+  echo "==> Installing rclone (cloud backup)..."
+  curl -fsSL https://rclone.org/install.sh | bash >/dev/null 2>&1 || apt-get install -y rclone >/dev/null 2>&1 || true
+fi
+rclone version 2>/dev/null | head -1 || echo "   (rclone not installed — cloud backup disabled)"
+
 NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
 if [ "$NODE_MAJOR" -lt 18 ]; then
   echo "==> Node.js too old ($NODE_MAJOR). Installing Node.js 22 LTS from NodeSource..."
