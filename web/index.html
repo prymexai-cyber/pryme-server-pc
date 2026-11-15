@@ -45,6 +45,7 @@
   <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2.5 9a14 14 0 0 1 19 0M5.5 12.5a9.5 9.5 0 0 1 13 0M8.6 16a5 5 0 0 1 6.8 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="19.2" r="1.3" fill="currentColor"/></symbol>
   <symbol id="i-apps" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="4" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="13" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="13" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
   <symbol id="i-restore" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7M4 4v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.5a4.25 4.25 0 0 1-.5 8.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 11v5m0 0-2-2m2 2 2-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-dots" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="12" cy="19" r="1.7" fill="currentColor"/></symbol>
 </svg>
 
@@ -91,6 +92,7 @@
       <button data-tab="home" class="active" data-tip="Home"><svg><use href="#i-home"/></svg><span>Home</span></button>
       <button data-tab="files" data-tip="Files"><svg><use href="#i-files"/></svg><span>Files</span></button>
       <button data-tab="photos" data-tip="Photos"><svg><use href="#i-photo"/></svg><span>Photos</span></button>
+      <button data-tab="cloud" data-tip="Cloud Backup"><svg><use href="#i-cloud"/></svg><span>Cloud</span></button>
       <button data-tab="live" data-tip="Live Screen"><svg><use href="#i-screen"/></svg><span>Screen</span></button>
       <button data-tab="trash" data-tip="Trash"><svg><use href="#i-trash"/></svg><span>Trash</span></button>
       <button data-tab="transfers" data-tip="Transfers"><svg><use href="#i-transfer"/></svg><span>Transfers</span><i class="badge hidden" id="tBadge">0</i></button>
@@ -255,6 +257,15 @@
       <div id="phGrid" class="ph-grid"></div>
     </section>
 
+    <!-- CLOUD BACKUP -->
+    <section class="view" id="view-cloud">
+      <div class="col-h"><h3>Accounts</h3><span class="muted small" id="cbVer"></span></div>
+      <div class="acc-grid" id="cbAccounts"><div class="empty-sm">Loading…</div></div>
+      <div class="col-h" style="margin-top:28px"><h3>Backups</h3><button class="btn primary sm" id="cbNew"><svg><use href="#i-cloud"/></svg>New backup</button></div>
+      <div id="cbJobs" class="jobs"></div>
+      <p class="muted small" style="margin-top:16px">Backups copy files <b>from</b> your cloud <b>to</b> the server, into <code>Cloud Backup/&lt;account&gt;</code> on the drive you choose. Nothing is ever deleted from your cloud. Files you delete in the cloud stay safe on the server.</p>
+    </section>
+
     <!-- TRASH -->
     <section class="view" id="view-trash">
       <div class="tile trash-card">
@@ -305,6 +316,10 @@
           <dl class="kv" id="srvInfo"></dl>
           <button class="btn danger sm" id="unlinkBtn">Unlink this PC</button>
         </div>
+        <div class="tile set set-wide" id="wakerCard">
+          <h4>⚡ Power On button</h4>
+          <div id="wakerBody" class="small"></div>
+        </div>
         <div class="tile set set-wide" id="cloudCard">
           <h4 id="cloudCardH">Pryme Cloud</h4>
           <div id="cloudCardBody" class="small"></div>
@@ -343,6 +358,7 @@
   </main>
 </div>
 
+<div id="sheet" class="modal hidden"><div class="sheet-card" id="sheetCard"></div></div>
 <div id="modal" class="modal hidden"><div class="modal-card" id="modalCard"></div></div>
 <div id="viewer" class="viewer hidden"></div>
 <div id="toasts" class="toasts"></div>
