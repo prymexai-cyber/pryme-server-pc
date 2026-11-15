@@ -40,6 +40,12 @@
   <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
   <symbol id="i-mouse" viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 7v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
   <symbol id="i-open" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-photo" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="10" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m4 18 5-5 4 4 3-3 4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4.5 6v6c0 4.4 3.2 8.2 7.5 9 4.3-.8 7.5-4.6 7.5-9V6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m8.5 12 2.5 2.5 4.5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2.5 9a14 14 0 0 1 19 0M5.5 12.5a9.5 9.5 0 0 1 13 0M8.6 16a5 5 0 0 1 6.8 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="19.2" r="1.3" fill="currentColor"/></symbol>
+  <symbol id="i-apps" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="4" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="13" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="13" width="7" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+  <symbol id="i-restore" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7M4 4v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-dots" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="12" cy="19" r="1.7" fill="currentColor"/></symbol>
 </svg>
 
 <!-- Loading -->
@@ -79,77 +85,112 @@
 
 <!-- App -->
 <div id="app" class="app hidden">
-  <aside class="side">
-    <div class="brand">
-      <svg class="logo"><use href="#logo"/></svg>
-      <div><b>Pryme</b><span>Server PC</span></div>
-    </div>
+  <aside class="rail">
+    <div class="rail-logo" title="Pryme Server PC"><svg class="logo"><use href="#logo"/></svg></div>
     <nav class="nav" id="nav">
-      <button data-tab="home" class="active"><svg><use href="#i-home"/></svg><span>Home</span></button>
-      <button data-tab="files"><svg><use href="#i-files"/></svg><span>Files</span></button>
-      <button data-tab="live"><svg><use href="#i-screen"/></svg><span>Live Screen</span></button>
-      <button data-tab="transfers"><svg><use href="#i-transfer"/></svg><span>Transfers</span><i class="badge hidden" id="tBadge">0</i></button>
-      <button data-tab="settings"><svg><use href="#i-settings"/></svg><span>Settings</span></button>
+      <button data-tab="home" class="active" data-tip="Home"><svg><use href="#i-home"/></svg><span>Home</span></button>
+      <button data-tab="files" data-tip="Files"><svg><use href="#i-files"/></svg><span>Files</span></button>
+      <button data-tab="photos" data-tip="Photos"><svg><use href="#i-photo"/></svg><span>Photos</span></button>
+      <button data-tab="live" data-tip="Live Screen"><svg><use href="#i-screen"/></svg><span>Screen</span></button>
+      <button data-tab="trash" data-tip="Trash"><svg><use href="#i-trash"/></svg><span>Trash</span></button>
+      <button data-tab="transfers" data-tip="Transfers"><svg><use href="#i-transfer"/></svg><span>Transfers</span><i class="badge hidden" id="tBadge">0</i></button>
+      <button data-tab="settings" data-tip="Settings"><svg><use href="#i-settings"/></svg><span>Settings</span></button>
     </nav>
-    <div class="side-card" id="sideCard">
-      <div class="sc-row"><span class="dot" id="sideDot"></span><b id="sideName">Server</b></div>
-      <span class="muted" id="sideState">Offline</span>
+    <div class="rail-foot">
+      <button class="rail-btn" id="themeBtn" data-tip="Light / dark"><svg><use href="#i-moon"/></svg></button>
+      <button class="rail-btn" id="logoutBtn" data-tip="Sign out"><svg><use href="#i-logout"/></svg></button>
     </div>
   </aside>
 
-  <main class="main">
+  <main class="main" id="main">
     <header class="top">
-      <div class="top-title">
-        <h2 id="pageTitle">Home</h2>
-        <p class="muted" id="pageSub">Overview &amp; power control</p>
+      <div class="who">
+        <div class="avatar" id="avatar">P</div>
+        <div><b id="whoName">Pryme</b><span id="whoSub">Local owner account</span></div>
       </div>
       <div class="top-actions">
         <a class="btn sm fast hidden" id="fastBtn" target="_blank" rel="noopener" title="Open your server directly on home Wi-Fi (full speed)"><svg><use href="#i-bolt"/></svg><span>Fast mode</span></a>
-        <span class="pill" id="statusPill" data-phase="offline"><span class="dot"></span><span id="pillText">Offline</span></span>
-        <button class="icon-btn" id="themeBtn" title="Switch light / dark"><svg><use href="#i-moon"/></svg></button>
-        <button class="icon-btn" id="logoutBtn" title="Sign out"><svg><use href="#i-logout"/></svg></button>
+        <span class="pill" id="statusPill" data-phase="offline"><span class="dot" id="sideDot"></span><span id="pillText">Offline</span></span>
       </div>
     </header>
+    <div class="view-head" id="viewHead"><h2 id="pageTitle">Home</h2><p id="pageSub"></p></div>
 
     <!-- HOME -->
     <section class="view active" id="view-home">
-      <div class="hero card" id="hero" data-phase="offline">
-        <div class="power-wrap">
-          <span class="pring"></span><span class="pring r2"></span>
-          <button class="power-btn" id="powerBtn" aria-label="Power"><svg><use href="#i-power"/></svg></button>
-        </div>
-        <div class="hero-info">
-          <div class="eyebrow" id="heroName">PRYME SERVER PC</div>
-          <h3 id="heroTitle">Offline</h3>
-          <p class="muted" id="heroSub">Press the power button to wake your server.</p>
-          <div class="hero-actions">
-            <button class="btn primary" id="btnOn"><svg><use href="#i-power"/></svg>Power On</button>
-            <button class="btn" id="btnRestart"><svg><use href="#i-restart"/></svg>Restart</button>
-            <button class="btn danger" id="btnOff"><svg><use href="#i-power"/></svg>Shut Down</button>
+      <div class="dash">
+        <!-- server -->
+        <div class="col col-server">
+          <div class="col-h"><h3 id="heroName">Pryme Server PC</h3><span class="muted small" id="sideName"></span></div>
+          <div class="tile server" id="hero" data-phase="offline">
+            <div class="dotfield"></div>
+            <button class="server-art" id="powerBtn" aria-label="Power">
+              <svg class="logo"><use href="#logo"/></svg>
+              <span class="pwr-badge"><svg><use href="#i-power"/></svg></span>
+            </button>
+            <div class="server-info">
+              <h4 id="heroTitle">Offline</h4>
+              <p id="heroSub">Press the power button to wake your server.</p>
+              <div class="hero-actions">
+                <button class="btn primary" id="btnOn"><svg><use href="#i-power"/></svg>Power On</button>
+                <button class="btn" id="btnRestart"><svg><use href="#i-restart"/></svg>Restart</button>
+                <button class="btn danger" id="btnOff"><svg><use href="#i-power"/></svg>Shut Down</button>
+              </div>
+              <dl class="meta">
+                <div><dt>MAC</dt><dd id="mMac">—</dd></div>
+                <div><dt>Uptime</dt><dd id="mUp">—</dd></div>
+                <div><dt>Link</dt><dd id="mLink">—</dd></div>
+              </dl>
+            </div>
+            <div class="conn" id="connPill"><svg><use href="#i-wifi"/></svg><span id="sideState">Offline</span><b id="mIp">—</b></div>
           </div>
         </div>
-        <dl class="hero-meta">
-          <div><dt>IP address</dt><dd id="mIp">—</dd></div>
-          <div><dt>MAC</dt><dd id="mMac">—</dd></div>
-          <div><dt>Uptime</dt><dd id="mUp">—</dd></div>
-          <div><dt>Network link</dt><dd id="mLink">—</dd></div>
-        </dl>
-      </div>
 
-      <div class="stats">
-        <div class="card stat"><div class="stat-h"><span>CPU</span><b id="sCpu">—</b></div><div class="bar"><i id="bCpu"></i></div><small class="muted ell" id="sCpuM">—</small></div>
-        <div class="card stat"><div class="stat-h"><span>Memory</span><b id="sMem">—</b></div><div class="bar"><i id="bMem"></i></div><small class="muted" id="sMemM">—</small></div>
-        <div class="card stat"><div class="stat-h"><span>Temperature</span><b id="sTemp">—</b></div><div class="bar"><i id="bTemp"></i></div><small class="muted" id="sTempM">CPU package</small></div>
-        <div class="card stat"><div class="stat-h"><span>Network</span><b id="sNet">—</b></div><div class="net-row"><span>↓ <b id="sRx">—</b></span><span>↑ <b id="sTx">—</b></span></div><small class="muted" id="sNetM">—</small></div>
-      </div>
+        <!-- monitor -->
+        <div class="col col-mon">
+          <div class="col-h"><h3>Monitor</h3></div>
+          <div class="mon-grid">
+            <div class="tile t-cpu"><span class="lbl">CPU</span><b class="ttl ell" id="sCpuM">—</b><span class="sub" id="sCpuW">—</span>
+              <div class="t-foot"><span class="big" id="sCpu">—</span><span class="ring" id="rCpu"></span></div></div>
+            <div class="tile t-temp" id="tTemp"><div class="t-row"><span class="lbl">CPU</span><span class="lbl">°C</span></div><b class="ttl">Temperature</b>
+              <span class="huge" id="sTemp">—</span><span class="sub" id="sTempM"></span></div>
+            <div class="tile t-ram"><span class="lbl">RAM</span><b class="ttl" id="sMemT">—</b><span class="sub" id="sMemM">—</span>
+              <div class="t-foot"><span class="big" id="sMem">—</span><span class="ring" id="rMem"></span></div></div>
+            <div class="tile t-net"><div class="t-row"><span class="lbl">Network</span><span class="lbl" id="sNet">—</span></div><b class="ttl" id="sNetM">—</b>
+              <div class="nrow"><span>Upload</span><b id="sTx">—</b></div><div class="nbar"><i id="bTx"></i></div>
+              <div class="nrow"><span>Download</span><b id="sRx">—</b></div><div class="nbar"><i id="bRx"></i></div></div>
+            <div class="tile t-shield" id="tShield">
+              <div class="t-row"><span class="lbl">Power-cut protection</span><span class="chip" id="shieldChip">—</span></div>
+              <div class="shield-body">
+                <div class="shield-ic"><svg><use href="#i-shield"/></svg></div>
+                <div><b class="ttl" id="shieldTitle">Checking…</b><span class="sub" id="shieldSub">No UPS · software protection</span></div>
+              </div>
+              <ul class="checks" id="shieldChecks"></ul>
+            </div>
+          </div>
+        </div>
 
-      <div class="sec-h"><h4>Storage drives</h4><button class="link" data-goto="files">Open files →</button></div>
-      <div class="drives" id="drives"><div class="empty-sm muted">Server is offline.</div></div>
+        <!-- storage -->
+        <div class="col col-sto">
+          <div class="col-h"><h3>Storage</h3><button class="link" data-goto="files">Open files →</button></div>
+          <div class="sto-top">
+            <div class="tile t-sys"><span class="lbl">System disk</span><b class="ttl ell" id="sysName">—</b><span class="dots" id="dSys"></span><span class="lbl">Available</span><span class="big" id="sysFree">—</span></div>
+            <button class="tile t-bin" data-goto="trash"><span class="lbl">Trash</span><span class="bin-art"></span><span class="lbl">In use</span><span class="big" id="binSize">—</span></button>
+          </div>
+          <div class="col-h sub-h"><h3>Drives</h3></div>
+          <div class="drives" id="drives"><div class="empty-sm">Server is offline.</div></div>
+        </div>
+
+        <!-- apps / services -->
+        <div class="col col-apps">
+          <div class="col-h"><h3>Services</h3><span class="muted small">Everything running on your server</span></div>
+          <div class="apps" id="apps"><div class="empty-sm">Turn the server on to see its services.</div></div>
+        </div>
+      </div>
     </section>
 
     <!-- FILES -->
     <section class="view" id="view-files">
-      <div class="card files" id="filesCard">
+      <div class="tile files" id="filesCard">
         <div class="ftop">
           <nav class="crumbs" id="crumbs"></nav>
           <div class="ftools">
@@ -181,7 +222,7 @@
 
     <!-- LIVE -->
     <section class="view" id="view-live">
-      <div class="card live">
+      <div class="tile live">
         <div class="live-bar">
           <span class="live-tag" id="liveTag"><span class="dot"></span>LIVE</span>
           <span class="muted" id="liveInfo">Server screen</span>
@@ -203,15 +244,41 @@
       </div>
     </section>
 
+    <!-- PHOTOS -->
+    <section class="view" id="view-photos">
+      <div class="ph-bar">
+        <select id="phRoot"><option value="/">All drives</option></select>
+        <span class="muted small" id="phCount"></span>
+        <span class="spacer"></span>
+        <button class="btn sm" id="phRefresh"><svg><use href="#i-refresh"/></svg>Refresh</button>
+      </div>
+      <div id="phGrid" class="ph-grid"></div>
+    </section>
+
+    <!-- TRASH -->
+    <section class="view" id="view-trash">
+      <div class="tile trash-card">
+        <div class="ftop">
+          <div><b id="trInfo">Trash</b><p class="muted small" style="margin:2px 0 0">Deleted files stay here for 30 days, then they are removed automatically.</p></div>
+          <div class="ftools">
+            <button class="btn sm" id="trRestore" disabled><svg><use href="#i-restore"/></svg>Restore</button>
+            <button class="btn sm danger" id="trDelete" disabled><svg><use href="#i-trash"/></svg>Delete forever</button>
+            <button class="btn sm danger" id="trEmpty"><svg><use href="#i-trash"/></svg>Empty trash</button>
+          </div>
+        </div>
+        <div id="trList" class="farea"></div>
+      </div>
+    </section>
+
     <!-- TRANSFERS -->
     <section class="view" id="view-transfers">
-      <div class="card tcard">
+      <div class="tile tcard">
         <div class="sec-h"><h4><svg><use href="#i-pc"/></svg>Server → this PC</h4>
           <div class="row-gap"><button class="btn sm" id="openDl"><svg><use href="#i-open"/></svg>Open folder</button><button class="btn sm" id="clearJobs">Clear finished</button></div></div>
         <p class="muted small" id="dlDirTxt"></p>
         <div id="jobList" class="tlist"></div>
       </div>
-      <div class="card tcard">
+      <div class="tile tcard">
         <div class="sec-h"><h4><svg><use href="#i-upload"/></svg>This PC → server</h4><button class="btn sm" id="clearUps">Clear finished</button></div>
         <div id="upList" class="tlist"></div>
       </div>
@@ -220,7 +287,7 @@
     <!-- SETTINGS -->
     <section class="view" id="view-settings">
       <div class="set-grid">
-        <div class="card set">
+        <div class="tile set">
           <h4>Appearance</h4>
           <div class="seg" id="themeSeg">
             <button data-theme="light"><svg><use href="#i-sun"/></svg>Light</button>
@@ -228,21 +295,21 @@
             <button data-theme="system">System</button>
           </div>
         </div>
-        <div class="card set">
+        <div class="tile set">
           <h4>Download folder on this PC</h4>
           <p class="muted small">"Get to this PC" saves files here automatically.</p>
           <div class="inline"><input id="dlDir"><button class="btn primary" id="saveDl">Save</button></div>
         </div>
-        <div class="card set">
+        <div class="tile set">
           <h4>Linked server</h4>
           <dl class="kv" id="srvInfo"></dl>
           <button class="btn danger sm" id="unlinkBtn">Unlink this PC</button>
         </div>
-        <div class="card set set-wide" id="cloudCard">
+        <div class="tile set set-wide" id="cloudCard">
           <h4 id="cloudCardH">Pryme Cloud</h4>
           <div id="cloudCardBody" class="small"></div>
         </div>
-        <div class="card set set-wide" id="plugCard">
+        <div class="tile set set-wide" id="plugCard">
           <h4>Smart plug (optional)</h4>
           <p class="muted small">Plug the server into a Wi-Fi smart plug and set BIOS <b>Restore on AC Power Loss → Power On</b>. Then <b>Power On</b> works even after the plug / power was switched off.</p>
           <div class="plug-grid">
@@ -264,7 +331,7 @@
           <p class="small bm hidden" id="plBmWrap">📌 <b>Power On bookmark:</b> <a id="plBm" target="_blank" rel="noopener">⚡ Pryme Power On</a> — save this link on your phone home screen / bookmarks bar. Tapping it switches the server on even when this page can't open.</p>
           <div class="row-gap" style="margin-top:14px"><button class="btn primary" id="plSave">Save</button><button class="btn" id="plTestOn">Test ON</button><button class="btn" id="plTestOff">Test OFF</button></div>
         </div>
-        <div class="card set" id="pwCard">
+        <div class="tile set" id="pwCard">
           <h4>Change password</h4>
           <label class="field"><span>Current password</span><input type="password" id="pwOld"></label>
           <label class="field"><span>New password</span><input type="password" id="pwNew"></label>
