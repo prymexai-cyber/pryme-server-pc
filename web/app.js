@@ -130,7 +130,8 @@ $('#logoutBtn').onclick = async () => { await post('/local/logout').catch(() => 
 /* ---------------- Tabs ---------------- */
 function setTab(t) {
   S.tab = t;
-  $$('#nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
+  $$('#nav button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
+  { const m = $('#moreBtn'); if (m) m.classList.toggle('active', ['live', 'trash', 'transfers', 'settings'].includes(t)); }
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + t));
   $('#pageTitle').textContent = TITLES[t][0]; $('#pageSub').textContent = TITLES[t][1];
   $('#main').classList.toggle('on-home', t === 'home');
@@ -174,7 +175,7 @@ async function refreshState() {
   stateBusy = false; S.fails = 0; S.st = st; S.serverMode = st.mode === 'server'; S.cloudMode = st.mode === 'cloud';
   if (!st.loggedIn) return showAuth();
   if ($('#app').classList.contains('hidden')) { showApp(); applyMode(); setTab(S.tab); }
-  if (S.cloudMode) renderFast();
+  if (S.cloudMode) { renderFast(); renderUpdateBanner(); }
   if (st.user) { $('#whoName').textContent = st.user; $('#avatar').textContent = st.user[0].toUpperCase(); $('#whoSub').textContent = S.cloudMode ? 'Pryme Cloud · signed in from anywhere' : 'Local owner account'; }
   if (S.serverMode && st.plug) { try { localStorage.setItem('pryme-plug', JSON.stringify(st.plug)); } catch {} }
   if (st.phase === 'online') { S.powerCmd = null; S.wakeAt = 0; S.cycleAsked = false; }
@@ -920,6 +921,16 @@ $('#unlinkBtn').onclick = async () => {
   await post('/local/unlink').catch(() => {}); location.reload();
 };
 
+const UPDATE_HTML = `Your server is running an older Pryme version. Update it once — on the server run:<div class="code" style="text-align:left;margin:10px auto 0;max-width:520px">cd ~/pryme-server-pc && git pull\nsudo bash server-agent/install.sh</div>`;
+function renderUpdateBanner() {
+  const s = S.st || {}, b = $('#updBanner'); if (!b) return;
+  const mm = v => String(v || '').split('.').slice(0, 2).join('.');
+  const old = S.cloudMode && s.agentVersion && s.online && mm(s.agentVersion) !== mm(s.version);
+  b.classList.toggle('hidden', !old);
+  if (old) b.innerHTML = `⬆️ <b>Server update available</b> — the server runs Pryme v${esc(s.agentVersion)}, this page is v${esc(s.version)}. <a href="#" id="updHow">How to update</a>`;
+  const h = $('#updHow'); if (h) h.onclick = ev => { ev.preventDefault(); sheet(`<div class="sheet-h"><h3>Update your server</h3><button class="icon-btn" data-close>${ico('x')}</button></div><div class="sheet-b"><p class="muted" style="margin-top:0">On the server (Terminal, or <code>ssh pryme@SERVER-IP</code> from your laptop):</p><div class="code">cd ~/pryme-server-pc && git pull\nsudo bash server-agent/install.sh\nsudo reboot</div><p class="muted small">Installer: change password → N · Render URL → Enter · key → Enter · the rest as before.</p></div><div class="sheet-f"><button class="btn" data-close>OK</button></div>`); };
+}
+
 /* ---------------- Sheet (big dialog) ---------------- */
 function sheet(html) { $('#sheetCard').innerHTML = html; $('#sheet').classList.remove('hidden'); $('#sheet').onclick = e => { if (e.target.id === 'sheet') closeSheet(); }; $$('[data-close]', $('#sheetCard')).forEach(b => (b.onclick = closeSheet)); }
 function closeSheet() { $('#sheet').classList.add('hidden'); $('#sheetCard').innerHTML = ''; }
@@ -964,7 +975,7 @@ async function cloudCall(action, extra) { return post('/api/cloud', { action, ..
 async function loadCloud() {
   if (S.phase !== 'online') { $('#cbAccounts').innerHTML = `<div class="empty-sm">Turn the server on to manage cloud backups.</div>`; $('#cbJobs').innerHTML = ''; return; }
   if (cbBusy) return; cbBusy = true;
-  try { S.cb = await cloudCall('status'); } catch (e) { $('#cbAccounts').innerHTML = `<div class="empty-sm">${esc(e.message)}</div>`; return; } finally { cbBusy = false; }
+  try { S.cb = await cloudCall('status'); } catch (e) { $('#cbAccounts').innerHTML = `<div class="empty-sm">${/unknown (op|action)|not found/i.test(e.message) ? UPDATE_HTML : esc(e.message)}</div>`; return; } finally { cbBusy = false; }
   renderCloud();
 }
 setInterval(() => { if (S.tab === 'cloud' && S.cb && S.cb.jobs.some(j => j.running)) loadCloud(); }, 2500);
@@ -1095,6 +1106,22 @@ async function jobWizard(job) {
   $('#wzSave').onclick = () => save(false); $('#wzSaveRun').onclick = () => save(true);
   chips(); open('');
 }
+
+/* ---------------- mobile "More" menu ---------------- */
+const MORE_TABS = ['live', 'trash', 'transfers', 'settings'];
+$('#moreBtn').onclick = () => {
+  const items = MORE_TABS.filter(t => !$(`#nav [data-tab=${t}]`).classList.contains('hidden')).map(t => {
+    const b = $(`#nav [data-tab=${t}]`), use = b.querySelector('use').getAttribute('href');
+    return `<button class="more-item${S.tab === t ? ' on' : ''}" data-go="${t}"><svg><use href="${use}"/></svg><span>${esc(TITLES[t][0])}</span></button>`;
+  }).join('');
+  const dark = document.documentElement.dataset.theme === 'dark';
+  sheet(`<div class="sheet-h"><h3>More</h3><button class="icon-btn" data-close>${ico('x')}</button></div><div class="sheet-b"><div class="more-grid">${items}
+    <button class="more-item" data-act="theme"><svg><use href="#i-${dark ? 'sun' : 'moon'}"/></svg><span>${dark ? 'Light mode' : 'Dark mode'}</span></button>
+    <button class="more-item danger" data-act="logout"><svg><use href="#i-logout"/></svg><span>Sign out</span></button></div></div>`);
+  $$('[data-go]', $('#sheetCard')).forEach(b => (b.onclick = () => { closeSheet(); setTab(b.dataset.go); }));
+  $('[data-act=theme]', $('#sheetCard')).onclick = () => { closeSheet(); $('#themeBtn').click(); };
+  $('[data-act=logout]', $('#sheetCard')).onclick = () => { closeSheet(); $('#logoutBtn').click(); };
+};
 
 /* ---------------- start ---------------- */
 setInterval(() => { if (S.st && S.st.loggedIn) { if (S.phase === 'booting') renderStatus(); if (S.tab === 'settings') renderSettings(); } if (!S.st || !S.st.configured) { if (!$('#setupForm').classList.contains('hidden')) renderDisc(); } }, 1000);
