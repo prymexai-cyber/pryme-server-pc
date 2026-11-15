@@ -10,7 +10,7 @@ function fmtBytes(n, d = 1) {
   if (n == null || isNaN(n)) return '—';
   const u = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']; let i = 0;
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-  return (i === 0 ? n : n.toFixed(n >= 100 ? 0 : d)) + ' ' + u[i];
+  return (i === 0 ? Math.round(n) : n.toFixed(n >= 100 ? 0 : d)) + ' ' + u[i];
 }
 const fmtRate = n => fmtBytes(n) + '/s';
 function fmtDur(s) {
@@ -84,7 +84,8 @@ const PHASE = {
 };
 const TITLES = {
   home: ['Home', 'Overview & power control'], files: ['Files', 'All drives on your server'], live: ['Live Screen', 'See your server screen in real time'],
-  transfers: ['Transfers', 'Uploads and copies to this PC'], settings: ['Settings', 'Theme, folders and account'],
+  transfers: ['Transfers', 'Uploads and copies to this PC'], settings: ['Settings', 'Theme, connections and account'],
+  photos: ['Photos', 'Every photo on your server, newest first'], trash: ['Trash', 'Restore deleted files'],
 };
 
 /* ---------------- Auth screens ---------------- */
@@ -132,6 +133,10 @@ function setTab(t) {
   $$('#nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + t));
   $('#pageTitle').textContent = TITLES[t][0]; $('#pageSub').textContent = TITLES[t][1];
+  $('#main').classList.toggle('on-home', t === 'home');
+  if (t === 'photos') loadPhotos();
+  if (t === 'trash') loadTrash();
+  if (t === 'home') pollHealth(true);
   if (t === 'files') loadDir(S.path);
   if (t === 'transfers') pollJobs();
   if (t === 'settings') { renderSettings(); renderPlug(); }
@@ -169,6 +174,7 @@ async function refreshState() {
   if (!st.loggedIn) return showAuth();
   if ($('#app').classList.contains('hidden')) { showApp(); applyMode(); setTab(S.tab); }
   if (S.cloudMode) renderFast();
+  if (st.user) { $('#whoName').textContent = st.user; $('#avatar').textContent = st.user[0].toUpperCase(); $('#whoSub').textContent = S.cloudMode ? 'Pryme Cloud · signed in from anywhere' : 'Local owner account'; }
   if (S.serverMode && st.plug) { try { localStorage.setItem('pryme-plug', JSON.stringify(st.plug)); } catch {} }
   if (st.phase === 'online') { S.powerCmd = null; S.wakeAt = 0; S.cycleAsked = false; }
   setPhase(st.phase);
@@ -178,9 +184,9 @@ setInterval(refreshState, 1000);
 // Parts that only make sense when the Pryme client app runs on this PC
 function applyMode() {
   const sm = S.serverMode || S.cloudMode, cm = S.cloudMode;
-  $('#dlDir').closest('.card').classList.toggle('hidden', sm);
+  $('#dlDir').closest('.tile').classList.toggle('hidden', sm);
   $('#unlinkBtn').classList.toggle('hidden', sm);
-  $('#jobList').closest('.card').classList.toggle('hidden', sm);
+  $('#jobList').closest('.tile').classList.toggle('hidden', sm);
   $('#plugCard').classList.toggle('hidden', cm);       // in the cloud the plug is set in Render
   $('#pwCard').classList.toggle('hidden', cm);         // cloud password = Render setting
   $('#cloudNote').classList.toggle('hidden', !cm);
@@ -189,7 +195,7 @@ function applyMode() {
   document.title = cm ? 'Pryme Cloud · Server PC' : 'Pryme Server PC';
   $('#plType option[value=sonoff]').classList.toggle('hidden', sm);
   $('#plCut').closest('label').querySelector('span').textContent = sm ? 'Cut power 45s after Shut Down (needed for Power On from this page)' : 'Cut power 20s after shutdown (saves electricity)';
-  $('#upList').closest('.card').querySelector('h4').lastChild.textContent = sm ? 'This device → server' : 'This PC → server';
+  $('#upList').closest('.tile').querySelector('h4').lastChild.textContent = sm ? 'This device → server' : 'This PC → server';
 }
 function lanUrl() { const s = S.st || {}; return s.lanUrl || (s.server && s.server.ip ? 'http://' + s.server.ip : null); }
 function renderFast() {
@@ -228,7 +234,8 @@ function onPhaseChange(from, to) {
     if (S.goLiveOnBoot) { S.goLiveOnBoot = false; if (S.tab !== 'live') setTab('live'); }
     pollStats(); if (S.tab === 'files') loadDir(S.path);
   }
-  if (to === 'online') { pollStats(); if (S.tab === 'files') loadDir(S.path); }
+  if (to === 'online') { pollStats(); pollHealth(true); if (S.tab === 'files') loadDir(S.path); if (S.tab === 'photos') loadPhotos(); if (S.tab === 'trash') loadTrash(); }
+  if (to !== 'online') renderHealth();
   if (to === 'offline' && (from === 'shutting-down' || from === 'online')) { S.stats = null; renderStats(); }
   if (to !== 'online') { if (S.tab === 'files') renderFiles(); }
   updateLive();
@@ -242,8 +249,8 @@ function renderStatus() {
   if (ph === 'booting' && S.wakeAt) sub = `Wake signal sent · ${Math.round((Date.now() - S.wakeAt) / 1000)}s — screen opens automatically when ready.`;
   $('#heroSub').textContent = sub;
   $('#heroName').textContent = srv.name || 'Pryme Server PC';
-  $('#sideName').textContent = srv.name || 'Server';
-  $('#sideState').textContent = info.pill + (srv.ip ? ' · ' + srv.ip : '');
+  $('#sideName').textContent = srv.ip ? srv.ip : '';
+  $('#sideState').textContent = ph === 'online' ? (S.cloudMode ? 'Cloud connection' : 'Local connection') : info.pill;
   $('#sideDot').className = 'dot ' + ({ online: 'online', booting: 'booting', restarting: 'booting', 'shutting-down': 'stopping' }[ph] || '');
   $('#mIp').textContent = srv.ip || '—'; $('#mMac').textContent = (srv.mac || '—').toUpperCase();
   const on = ph === 'online', busy = ph === 'booting' || ph === 'restarting' || ph === 'shutting-down';
@@ -317,36 +324,166 @@ async function pollStats() {
   try { S.stats = await get('/api/stats'); renderStats(); } catch {} finally { statsBusy = false; }
 }
 setInterval(() => { if (S.tab === 'home' || S.tab === 'settings') pollStats(); }, 2000);
-function setBar(id, pct, hot) { const el = $(id); el.style.width = Math.max(0, Math.min(100, pct || 0)) + '%'; el.classList.toggle('hot', !!hot); }
+function setBar(id, pct, hot) { const el = $(id); if (!el) return; el.style.width = Math.max(0, Math.min(100, pct || 0)) + '%'; el.classList.toggle('hot', !!hot); }
+// Dotted ring gauge (like a NAS dashboard)
+function ring(pct, color) {
+  const n = 28, on = Math.round(Math.max(0, Math.min(100, pct || 0)) / 100 * n);
+  let c = '';
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 - Math.PI / 2, x = 50 + 40 * Math.cos(a), y = 50 + 40 * Math.sin(a);
+    c += `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="3.1" fill="${i < on ? color : 'var(--dot)'}"/>`;
+  }
+  return `<svg viewBox="0 0 100 100">${c}</svg>`;
+}
+function dots(pct, n = 34) {
+  const on = Math.max(pct > 0 ? 1 : 0, Math.round(Math.max(0, Math.min(100, pct || 0)) / 100 * n));
+  return Array.from({ length: n }, (_, i) => `<i class="${i < on ? 'on' : ''}"></i>`).join('');
+}
+const linkTxt = n => (n.link ? (n.link >= 1000 ? n.link / 1000 + ' Gbps' : n.link + ' Mbps') : n.iface);
 function renderStats() {
   const s = S.stats;
   if (!s) {
-    ['#sCpu', '#sMem', '#sTemp', '#sNet', '#sRx', '#sTx'].forEach(i => ($(i).textContent = '—'));
-    ['#bCpu', '#bMem', '#bTemp'].forEach(i => setBar(i, 0));
-    $('#drives').innerHTML = `<div class="empty-sm muted">${S.phase === 'online' ? 'Loading…' : 'Turn the server on to see its drives.'}</div>`;
+    ['#sCpu', '#sMem', '#sTemp', '#sNet', '#sRx', '#sTx', '#sysFree', '#sMemT', '#sCpuM', '#sCpuW', '#sMemM', '#sNetM', '#sysName'].forEach(i => ($(i).textContent = '—'));
+    $('#rCpu').innerHTML = ring(0); $('#rMem').innerHTML = ring(0); $('#dSys').innerHTML = dots(0, 20);
+    setBar('#bTx', 0); setBar('#bRx', 0); $('#tTemp').className = 'tile t-temp';
+    $('#drives').innerHTML = `<div class="empty-sm">${S.phase === 'online' ? 'Loading…' : 'Turn the server on to see its drives.'}</div>`;
     return;
   }
-  $('#sCpu').textContent = s.cpu + '%'; setBar('#bCpu', s.cpu, s.cpu > 85); $('#sCpuM').textContent = `${s.cpuModel} · ${s.cores} threads`;
+  $('#sCpu').innerHTML = s.cpu + '<small>%</small>'; $('#sCpuM').textContent = s.cpuModel || 'CPU';
+  $('#sCpuW').textContent = `${s.cores} threads · load ${(s.load && s.load[0] || 0).toFixed(2)}`;
+  $('#rCpu').innerHTML = ring(s.cpu, s.cpu > 85 ? 'var(--warn)' : 'var(--blue)');
   const mp = s.mem.total ? Math.round(s.mem.used / s.mem.total * 100) : 0;
-  $('#sMem').textContent = mp + '%'; setBar('#bMem', mp, mp > 90); $('#sMemM').textContent = `${fmtBytes(s.mem.used)} of ${fmtBytes(s.mem.total)}`;
-  if (s.temp != null) { $('#sTemp').textContent = s.temp + '°C'; setBar('#bTemp', s.temp, s.temp > 75); } else { $('#sTemp').textContent = 'n/a'; setBar('#bTemp', 0); }
+  $('#sMem').innerHTML = mp + '<small>%</small>'; $('#sMemT').textContent = fmtBytes(s.mem.total, 0);
+  $('#sMemM').textContent = fmtBytes(s.mem.used) + ' in use'; $('#rMem').innerHTML = ring(mp, mp > 90 ? 'var(--warn)' : 'var(--blue)');
+  if (s.temp != null) { $('#sTemp').textContent = s.temp; $('#sTempM').textContent = s.temp > 85 ? 'Too hot — check the fan' : s.temp > 70 ? 'Warm' : 'Normal'; }
+  else { $('#sTemp').textContent = 'n/a'; $('#sTempM').textContent = 'Sensor not available'; }
+  $('#tTemp').className = 'tile t-temp' + (s.temp > 85 ? ' burn' : s.temp > 70 ? ' hot' : '');
   if (s.net) {
-    $('#sNet').textContent = s.net.link ? (s.net.link >= 1000 ? s.net.link / 1000 + ' Gbps' : s.net.link + ' Mbps') : s.net.iface;
+    const max = s.net.link ? s.net.link * 125000 : 12.5e6, sc = v => Math.min(100, Math.max(v > 0 ? 2 : 0, Math.sqrt(v / max) * 100));
+    $('#sNet').textContent = linkTxt(s.net); $('#sNetM').textContent = s.net.iface;
     $('#sRx').textContent = fmtRate(s.net.rx); $('#sTx').textContent = fmtRate(s.net.tx);
-    $('#sNetM').textContent = `${s.net.iface} · ${s.os}`;
-    $('#mLink').textContent = s.net.link ? (s.net.link >= 1000 ? s.net.link / 1000 + ' Gbps' : s.net.link + ' Mbps') : s.net.iface;
+    setBar('#bRx', sc(s.net.rx)); setBar('#bTx', sc(s.net.tx)); $('#mLink').textContent = linkTxt(s.net);
   }
   $('#mUp').textContent = fmtDur(s.uptime);
+  const sys = s.system || { total: 0, free: 0 }, sp = sys.total ? Math.round((sys.total - sys.free) / sys.total * 100) : 0;
+  const sd = ((S.health && S.health.disks) || []).find(d => d.system);
+  $('#sysName').textContent = sd ? sd.model : (s.hostname || 'System');
+  $('#sysFree').textContent = fmtBytes(sys.free); $('#dSys').innerHTML = dots(sp, 20); $('#dSys').classList.toggle('hot', sp > 90);
+  S.drives = s.drives;
   $('#drives').innerHTML = s.drives.length ? s.drives.map(driveCard).join('')
-    : `<div class="empty-sm muted">No drives yet. On the server run <code>sudo bash /opt/pryme/mount-drives.sh</code></div>`;
+    : `<div class="empty-sm">No drives yet. On the server run <code>sudo bash /opt/pryme/mount-drives.sh</code></div>`;
   bindDriveCards($('#drives'));
 }
+function diskFor(d) {
+  const h = S.health && S.health.disks; if (!h) return null;
+  return h.find(x => x.mounts.some(m => m === '/srv/pryme/' + d.name)) || h.find(x => x.system) || null;
+}
+const HS = { healthy: 'Healthy', warning: 'Warning', failing: 'Failing!', unknown: 'Health n/a' };
 function driveCard(d) {
-  const used = d.total - d.free, pct = d.total ? Math.round(used / d.total * 100) : 0;
-  return `<button class="card drive" data-path="${esc(d.path)}"><div class="drive-h"><div class="drive-ic">${ico('drive')}</div><div><b>${esc(d.name)}</b><small>${fmtBytes(d.total)} total</small></div></div>
-    <div class="bar"><i style="width:${pct}%" class="${pct > 90 ? 'hot' : ''}"></i></div><div class="drive-f"><span>${fmtBytes(used)} used</span><span>${fmtBytes(d.free)} free</span></div></button>`;
+  const used = d.total - d.free, pct = d.total ? Math.round(used / d.total * 100) : 0, k = diskFor(d);
+  const st = k ? k.status : null;
+  const sub = k ? `${k.usb ? 'USB' : k.ssd ? 'SSD' : 'HDD'} · ${esc(k.model)}` : 'Drive';
+  const meta = k ? [k.temp != null && `🌡 ${k.temp}°C`, k.hours != null && `⏱ ${k.hours.toLocaleString()} h on`, k.unsafe != null && `⚡ ${k.unsafe} power cuts`].filter(Boolean).join('</span><span>') : '';
+  return `<button class="tile drive" data-path="${esc(d.path)}"><div class="drive-h"><div><b>${esc(d.name)}</b><small>${sub}</small></div>${st ? `<span class="hbadge ${st}">${HS[st]}</span>` : ''}</div>
+    <span class="dots ${pct > 90 ? 'hot' : ''}">${dots(pct, 40)}</span>
+    <div class="drive-f"><div><span class="lbl">Available</span><span class="big">${fmtBytes(d.free)}</span></div><small>${fmtBytes(used)} used / ${fmtBytes(d.total)}</small></div>
+    ${meta ? `<div class="disk-meta"><span>${meta}</span></div>` : ''}</button>`;
 }
 function bindDriveCards(root) { $$('.drive', root).forEach(b => (b.onclick = () => { S.path = b.dataset.path; setTab('files'); })); }
+
+
+/* ---------------- Health · power-cut shield · services ---------------- */
+let healthBusy = false, healthAt = 0;
+async function pollHealth(force) {
+  if (healthBusy || S.phase !== 'online' || !S.st || !S.st.loggedIn) { if (S.phase !== 'online') renderHealth(); return; }
+  if (!force && Date.now() - healthAt < 30000) return;
+  healthBusy = true;
+  try {
+    const [h, t] = await Promise.all([get('/api/health'), get('/api/trash').catch(() => null)]);
+    S.health = h; S.trash = t; healthAt = Date.now(); renderHealth(); renderStats();
+  } catch {} finally { healthBusy = false; }
+}
+setInterval(() => { if (S.tab === 'home') pollHealth(); }, 5000);
+const APP_IC = { samba: '🗂️', smart: '🩺', backup: '🔁', jellyfin: '🎬', cloud: '☁️', wol: '⚡', ssh: '⌨️' };
+const APP_TXT = { samba: 'Map as a network drive in File Explorer', smart: 'Warns before a disk fails', backup: 'Copies a folder to another drive every day', jellyfin: 'Watch movies & music on TV / phone', cloud: 'Open Pryme from anywhere', wol: 'Power On over the network', ssh: 'Command line from your laptop' };
+function renderHealth() {
+  const h = S.health, online = S.phase === 'online';
+  const binTxt = S.trash ? fmtBytes(S.trash.size) : '—';
+  $('#binSize').textContent = online ? binTxt : '—';
+  if (!h || !online) {
+    $('#shieldChip').textContent = '—'; $('#shieldChip').className = 'chip';
+    $('#shieldTitle').textContent = online ? 'Checking…' : 'Server is off'; $('#shieldChecks').innerHTML = '';
+    $('#apps').innerHTML = `<div class="empty-sm">${online ? 'Loading services…' : 'Turn the server on to see its services.'}</div>`;
+    return;
+  }
+  const sf = h.safety || {}, cuts = sf.powercuts || [];
+  $('#shieldChip').textContent = sf.score + '% protected';
+  $('#shieldChip').className = 'chip ' + (sf.score >= 100 ? 'good' : sf.score >= 60 ? 'mid' : 'bad');
+  $('#shieldTitle').textContent = sf.recovered ? '⚠ Recovered after a power cut' : cuts.length ? `${cuts.length} power cut${cuts.length > 1 ? 's' : ''} survived` : 'No power cuts recorded';
+  $('#shieldSub').textContent = sf.recovered && sf.recovered.at ? `Power was lost around ${fmtDate(sf.recovered.at)} — disks were checked automatically` : cuts[0] && cuts[0].at ? `Last one: ${fmtDate(cuts[0].at)} · No UPS — software protection is on` : 'No UPS · software protection keeps your files safe';
+  $('#shieldChecks').innerHTML = (sf.checks || []).map(c => `<li class="${c.ok ? 'ok' : ''}" title="${esc(c.info || '')}">${esc(c.label)}${c.optional ? ' <span class="muted">(optional)</span>' : ''}</li>`).join('');
+  $('#apps').innerHTML = (h.services || []).map(a => `<div class="tile app-tile"><div class="app-h"><span class="app-ic">${APP_IC[a.id] || '•'}</span><span class="dot ${a.on ? 'on' : 'off'}"></span></div>
+    <b>${esc(a.name)}</b><span class="sub">${a.on ? (a.id === 'backup' && a.last ? 'Last backup: ' + fmtDate(a.last.at) + (a.last.ok ? ' ✓' : ' ✗') : APP_TXT[a.id] || 'Running') : a.on === null ? 'Unknown' : 'Not set up · see README'}</span>
+    ${a.url && a.on ? (a.url.startsWith('http') ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">Open ↗</a>` : `<a title="Copy" data-copy="${esc(a.url)}" href="#">${esc(a.url)}</a>`) : ''}</div>`).join('');
+  $$('#apps [data-copy]').forEach(x => (x.onclick = ev => { ev.preventDefault(); navigator.clipboard && navigator.clipboard.writeText(x.dataset.copy).then(() => toast('Copied — paste it in File Explorer', 'ok')); }));
+}
+
+/* ---------------- Trash ---------------- */
+S.trSel = new Set();
+async function loadTrash() {
+  if (S.phase !== 'online') { $('#trList').innerHTML = `<div class="fempty">${ico('power')}<b>Server is off</b>Turn it on to see the trash.</div>`; return; }
+  try { S.trash = await get('/api/trash'); } catch (e) { $('#trList').innerHTML = `<div class="fempty"><b>${esc(e.message)}</b></div>`; return; }
+  S.trSel.clear(); renderTrash();
+}
+function renderTrash() {
+  const t = S.trash || { items: [], size: 0 };
+  $('#trInfo').textContent = t.items.length ? `${t.items.length} item${t.items.length > 1 ? 's' : ''} · ${fmtBytes(t.size)}` : 'Trash is empty';
+  $('#trRestore').disabled = $('#trDelete').disabled = !S.trSel.size; $('#trEmpty').disabled = !t.items.length;
+  $('#trList').innerHTML = t.items.length ? t.items.map(i => `<div class="tr-row ${S.trSel.has(i.id) ? 'sel' : ''}" data-id="${esc(i.id)}"><input type="checkbox" ${S.trSel.has(i.id) ? 'checked' : ''}>
+      <div style="min-width:0"><b>${esc(i.name)}</b><small>From ${esc(i.from)} · deleted ${fmtDate(i.at)}</small></div><span class="sz">${i.dir ? 'Folder · ' : ''}${fmtBytes(i.size)}</span>
+      <button class="btn sm" data-r="${esc(i.id)}">${ico('restore')}Restore</button></div>`).join('')
+    : `<div class="fempty">${ico('trash')}<b>Nothing here</b>Files you delete in Pryme come here first, so you can get them back.</div>`;
+  $$('#trList .tr-row').forEach(r => { const id = r.dataset.id; $('input', r).onchange = () => { S.trSel.has(id) ? S.trSel.delete(id) : S.trSel.add(id); renderTrash(); }; });
+  $$('#trList [data-r]').forEach(b => (b.onclick = () => trashAct('restore', [b.dataset.r])));
+}
+async function trashAct(kind, ids) {
+  try {
+    if (kind === 'restore') { const r = await post('/api/trash/restore', { ids }); toast(`Restored ${r.restored} item(s)`, 'ok'); }
+    else {
+      const all = !ids;
+      if (!(await modal({ title: all ? 'Empty the trash?' : 'Delete forever?', text: 'These files will be permanently deleted. This cannot be undone.', ok: 'Delete forever', danger: true }))) return;
+      const r = await post('/api/trash/empty', all ? {} : { ids }); toast(`Deleted ${r.deleted} item(s) forever`, 'ok');
+    }
+    loadTrash(); healthAt = 0;
+  } catch (e) { toast(e.message, 'err'); }
+}
+$('#trRestore').onclick = () => trashAct('restore', [...S.trSel]);
+$('#trDelete').onclick = () => trashAct('delete', [...S.trSel]);
+$('#trEmpty').onclick = () => trashAct('delete', null);
+
+/* ---------------- Photos ---------------- */
+async function loadPhotos(force) {
+  const g = $('#phGrid');
+  if (S.cloudMode) { g.innerHTML = `<div class="fempty">${ico('photo')}<b>Photos open in Fast mode</b>Photos load straight from your server on home Wi-Fi (no cloud limits).<br><br>${lanUrl() ? `<a class="btn primary" href="${esc(lanUrl())}" target="_blank" rel="noopener">${ico('bolt')}Open Fast mode</a>` : ''}</div>`; return; }
+  if (S.phase !== 'online') { g.innerHTML = `<div class="fempty">${ico('power')}<b>Server is off</b>Turn it on to see your photos.</div>`; return; }
+  const sel = $('#phRoot'), cur = sel.value || '/';
+  sel.innerHTML = `<option value="/">All drives</option>` + (S.drives || []).map(d => `<option value="${esc(d.path)}">${esc(d.name)}</option>`).join('');
+  sel.value = cur;
+  g.innerHTML = `<div class="fempty"><div class="spinner" style="margin:0 auto;border-color:var(--border2);border-top-color:var(--accent)"></div></div>`;
+  let d; try { d = await get('/api/photos?path=' + enc(cur) + (force ? '&t=' + Date.now() : '')); } catch (e) { g.innerHTML = `<div class="fempty"><b>${esc(e.message)}</b></div>`; return; }
+  $('#phCount').textContent = d.total ? `${d.total.toLocaleString()} photo${d.total > 1 ? 's' : ''}` : '';
+  if (!d.photos.length) { g.innerHTML = `<div class="fempty">${ico('photo')}<b>No photos yet</b>Upload photos in Files — they show up here automatically.</div>`; return; }
+  let html = '', month = '';
+  for (const ph of d.photos) {
+    const m = new Date(ph.mtime).toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
+    if (m !== month) { month = m; html += `<h4 class="ph-month">${esc(m)}</h4>`; }
+    html += `<button class="ph-item" data-p="${esc(ph.path)}" title="${esc(ph.name)}"><img loading="lazy" alt="" src="/api/thumb?w=360&path=${enc(ph.path)}"></button>`;
+  }
+  g.innerHTML = html;
+  $$('.ph-item', g).forEach(b => (b.onclick = () => openFile(b.dataset.p)));
+}
+$('#phRoot').onchange = () => loadPhotos();
+$('#phRefresh').onclick = () => loadPhotos(true);
 
 /* ---------------- Files ---------------- */
 const CAT = [
@@ -405,7 +542,7 @@ function renderFiles() {
   }
   if (S.view === 'grid') {
     area.innerHTML = `<div class="fgrid">${list.map(e => { const p = joinP(S.path, e.name); return `<div class="gitem ${S.sel.has(p) ? 'sel' : ''}" data-p="${esc(p)}" data-dir="${e.dir ? 1 : 0}">
-      <input type="checkbox" ${S.sel.has(p) ? 'checked' : ''}>${fileIcon(e)}<b title="${esc(e.name)}">${esc(e.name)}</b><small>${e.dir ? 'Folder' : fmtBytes(e.size)}</small></div>`; }).join('')}</div>`;
+      <input type="checkbox" ${S.sel.has(p) ? 'checked' : ''}>${!e.dir && !S.cloudMode && kind(e.name) === 'image' ? `<div class="ficon"><img loading="lazy" alt="" src="/api/thumb?w=300&path=${enc(p)}"></div>` : fileIcon(e)}<b title="${esc(e.name)}">${esc(e.name)}</b><small>${e.dir ? 'Folder' : fmtBytes(e.size)}</small></div>`; }).join('')}</div>`;
     $$('.gitem', area).forEach(g => {
       const p = g.dataset.p, isDir = g.dataset.dir === '1';
       $('input', g).onclick = ev => { ev.stopPropagation(); toggleSel(p); };
@@ -464,9 +601,9 @@ async function doAction(a, paths) {
     if (!nn || nn === old) return;
     try { await post('/api/rename', { path: paths[0], newName: nn.trim() }); toast('Renamed', 'ok'); loadDir(S.path); } catch (e) { toast(e.message, 'err'); }
   } else if (a === 'delete') {
-    const ok = await modal({ title: `Delete ${paths.length === 1 ? '"' + paths[0].split('/').pop() + '"' : paths.length + ' items'}?`, text: 'This permanently deletes from the server. It cannot be undone.', ok: 'Delete', danger: true });
+    const ok = await modal({ title: `Move ${paths.length === 1 ? '"' + paths[0].split('/').pop() + '"' : paths.length + ' items'} to Trash?`, text: 'You can restore it from Trash for 30 days.', ok: 'Move to Trash', danger: true });
     if (!ok) return;
-    try { await post('/api/delete', { paths }); toast('Deleted', 'ok'); loadDir(S.path); } catch (e) { toast(e.message, 'err'); }
+    try { await post('/api/delete', { paths }); toast('Moved to Trash', 'ok'); loadDir(S.path); healthAt = 0; } catch (e) { toast(e.message, 'err'); }
   }
 }
 
