@@ -253,9 +253,22 @@ cd ~/pryme-server-pc && git pull && sudo bash server-agent/nas-setup.sh
 ```
 1. Windows file sharing speed tuning · 2. Hard-disk health (SMART) · 3. Automatic daily backup between drives (deleted files kept in `.pryme-backup-old`) · 4. Jellyfin media server (optional)
 
+## 12. ⚡ Power On button (file එකක් නැතුව)
+OFF වෙලා තියෙන server එකක් on කරන්න **ගෙදර නිතරම on වෙලා තියෙන device එකකින්** wake signal එක යවන්න ඕන. ඒකට **Pryme Waker** එක එක පාරක් දාන්න:
+- **Windows PC එකක් (CCTV PC වගේ):** Pryme → Settings → **Set up Power On button** → *Download Pryme Waker for Windows* → ඒ PC එකේ file එක **Right-click → Run with PowerShell** → Pryme username/password. ඉවරයි — Windows එක එක්කම hidden ව start වෙනවා.
+- **පරණ Android phone එකක් (charger එකේ):** F-Droid එකෙන් **Termux** දාලා Settings එකේ පෙන්නන commands 3 run කරන්න. Termux එකට battery optimisation off කරන්න.
+- ඊට පස්සේ Pryme Cloud එකේ **Power On** ඔබාම → Waker → Wake-on-LAN → server එක on ✅ (ලෝකයේ කොහේ ඉඳන් වුණත්)
+
+## 13. ☁️ Cloud Backup (Google Drive · OneDrive · iCloud)
+Pryme → **Cloud** tab:
+1. **Connect** → Google / Microsoft sign-in tab එකක් open වෙනවා → **Allow** → ඊට පස්සේ tab එකේ *"This site can't be reached"* පේනවා (**ඒක normal**) → ඒ tab එකේ address එක (`http://127.0.0.1:53682/...`) copy කරලා Pryme එකේ paste කරලා **Finish**.
+2. **iCloud:** iPhone → Settings → [name] → iCloud → **Advanced Data Protection OFF**, **Access iCloud Data on the Web ON** → Pryme එකේ Apple ID + password → iPhone එකට එන code එක. (Apple දින 30කට වතාවක් ආයේ sign in ඉල්ලනවා.)
+3. **New backup** → ඕන folders/files tick කරන්න → drive එක → *Every day / Every week / Manual* → **Save & run now**.
+- Files යන්නේ cloud → server (`<drive>/Cloud Backup/<account>/`). Cloud එකේ කිසිවක් මැකෙන්නේ නෑ. iCloud Photos backup එක Pryme **Photos** tab එකෙත් පේනවා.
+
 ---
 
-## 12. ප්‍රශ්න ආවොත්
+## 14. ප්‍රශ්න ආවොත්
 
 | ප්‍රශ්නය | විසඳුම |
 |---|---|
