@@ -101,6 +101,51 @@ EOF
   ethtool "$IFACE" | grep -i "wake-on" || true
 fi
 
+# ---------------- Power-cut protection (no UPS needed) ----------------
+echo "==> Power-cut protection"
+apt-get install -y smartmontools hdparm >/dev/null 2>&1 || true
+systemctl enable --now smartmontools >/dev/null 2>&1 || systemctl enable --now smartd >/dev/null 2>&1 || true
+# 1) Push data from RAM to the disks within ~3 s (default is 30 s) → much less is lost when power goes
+cat > /etc/sysctl.d/90-pryme-powercut.conf <<'EOF'
+vm.dirty_expire_centisecs = 300
+vm.dirty_writeback_centisecs = 100
+vm.dirty_background_bytes = 16777216
+vm.dirty_bytes = 134217728
+EOF
+sysctl --system >/dev/null 2>&1 || true
+# 2) After a power cut, check & repair disks automatically at boot (no keyboard / screen needed)
+if [ -f /etc/default/grub ] && ! grep -q "fsck.repair=yes" /etc/default/grub; then
+  sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"/GRUB_CMDLINE_LINUX_DEFAULT="\1 fsck.mode=auto fsck.repair=yes"/' /etc/default/grub
+  update-grub >/dev/null 2>&1 || true
+fi
+# 3) Let boot-time disk checks run on Pryme ext4 drives too (fstab pass 0 → 2)
+sed -i -E '/\/srv\/pryme\/[^ ]+[[:space:]]+ext4[[:space:]]/ s/[[:space:]]0[[:space:]]+0[[:space:]]*$/  0  2/' /etc/fstab
+# 4) Optional extra-safe mode: hard-disk write cache off
+read -rp "Extra-safe mode: turn OFF disk write cache (safest in power cuts, writes ~30% slower) [y/N]: " SAFE
+if [ "$SAFE" = "y" ] || [ "$SAFE" = "Y" ]; then
+  cat > /etc/systemd/system/pryme-safe-cache.service <<'EOF'
+[Unit]
+Description=Pryme - disk write cache off (power-cut safety)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'for d in /dev/sd?; do hdparm -W0 "$d" >/dev/null 2>&1 || true; done'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload; systemctl enable --now pryme-safe-cache.service >/dev/null 2>&1 || true
+  echo "   ✓ Extra-safe mode on"
+else
+  if [ -f /etc/systemd/system/pryme-safe-cache.service ]; then
+    systemctl disable pryme-safe-cache.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/pryme-safe-cache.service
+    for d in /dev/sd?; do hdparm -W1 "$d" >/dev/null 2>&1 || true; done
+  fi
+fi
+echo "   ✓ Fast flush (3 s) · auto disk repair at boot · disk health monitor"
+
 # A server must never fall asleep by itself
 systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target >/dev/null 2>&1 || true
 
