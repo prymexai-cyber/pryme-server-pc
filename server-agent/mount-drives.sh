@@ -36,7 +36,8 @@ while IFS= read -r line; do
     vfat)  T=vfat;  O="defaults,nofail,noatime,utf8,x-systemd.device-timeout=10s";;
     *)     T=$FSTYPE; O="defaults,nofail,noatime,x-systemd.device-timeout=10s";;
   esac
-  echo "UUID=$UUID  $MP  $T  $O  0  0" >> /etc/fstab
+  PASS=0; [ "$T" = "ext4" ] && PASS=2   # ext4: auto-check & repair at boot after a power cut
+  echo "UUID=$UUID  $MP  $T  $O  0  $PASS" >> /etc/fstab
   echo "  -> added: $MP"
 done < <(lsblk -Ppno NAME,FSTYPE,SIZE,LABEL,UUID,TYPE,MOUNTPOINT)
 
