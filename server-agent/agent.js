@@ -975,6 +975,25 @@ async function runTakeout(j, run) {
   try { fs.rmdirSync(stage); } catch {}
   return n ? `Imported ${n} Takeout file${n > 1 ? 's' : ''}` : 'Stopped';
 }
+// Dropped/uploaded Google Photos .zip (Takeout or photos.google.com "Download") → unpack next to it
+async function importZip(v) {
+  const { real } = vpath(v);
+  if (!/\.(zip|tgz|tar\.gz)$/i.test(real)) throw new HttpErr(400, 'Not a .zip file');
+  if (!fs.existsSync(real)) throw new HttpErr(404, 'File not found');
+  const dir = path.dirname(real), x = path.join(dir, '.unzip-' + crypto.randomBytes(3).toString('hex'));
+  fs.mkdirSync(x, { recursive: true });
+  try {
+    const u = /\.zip$/i.test(real) ? await runCmd('unzip', ['-o', '-q', real, '-x', '*.json', '-d', x]) : await runCmd('tar', ['-xzf', real, '--exclude=*.json', '-C', x]);
+    if (u.code === -1 || u.code > 1) throw new HttpErr(400, 'Could not unzip: ' + (u.err || 'bad file'));
+    // Takeout zip → album folders go into ".../Google Photos/"; a normal zip → its files stay in this folder
+    const tk = path.join(x, 'Takeout'); let src = x, dest = dir;
+    if (fs.existsSync(tk)) { const d = fs.readdirSync(tk).find(n => /photo|foto|照片|写真/i.test(n)); src = d ? path.join(tk, d) : tk; const gp = dir.split(path.sep).lastIndexOf('Google Photos'); if (gp > 0) dest = dir.split(path.sep).slice(0, gp + 1).join(path.sep); }
+    const c = await runCmd('cp', ['-a', src + '/.', dest + '/']);
+    if (c.code) throw new HttpErr(500, 'Could not save photos: ' + c.err);
+    fs.rmSync(real, { force: true }); photoCache.at = 0;
+    return { ok: true };
+  } finally { fs.rmSync(x, { recursive: true, force: true }); }
+}
 setInterval(() => {
   const now = Date.now(), h = new Date().getHours();
   for (const j of cfg.cloudJobs) {
@@ -1005,6 +1024,7 @@ async function cloudOp(b) {
       return { ok: true };
     }
     case 'browse': return browse(b.id, b.path);
+    case 'importZip': return importZip(b.path);
     case 'jobSave': {
       const j = b.job || {};
       if (!PROVIDERS[j.remote]) throw new HttpErr(400, 'Choose an account');
