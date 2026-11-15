@@ -85,7 +85,7 @@ const PHASE = {
 const TITLES = {
   home: ['Home', 'Overview & power control'], files: ['Files', 'All drives on your server'], live: ['Live Screen', 'See your server screen in real time'],
   transfers: ['Transfers', 'Uploads and copies to this PC'], settings: ['Settings', 'Theme, connections and account'],
-  photos: ['Photos', 'Every photo on your server, newest first'], trash: ['Trash', 'Restore deleted files'],
+  photos: ['Photos', 'Every photo on your server, newest first'], cloud: ['Cloud Backup', 'Back up Google Drive, OneDrive and iCloud to your server'], trash: ['Trash', 'Restore deleted files'],
 };
 
 /* ---------------- Auth screens ---------------- */
@@ -135,6 +135,7 @@ function setTab(t) {
   $('#pageTitle').textContent = TITLES[t][0]; $('#pageSub').textContent = TITLES[t][1];
   $('#main').classList.toggle('on-home', t === 'home');
   if (t === 'photos') loadPhotos();
+  if (t === 'cloud') loadCloud();
   if (t === 'trash') loadTrash();
   if (t === 'home') pollHealth(true);
   if (t === 'files') loadDir(S.path);
@@ -234,7 +235,7 @@ function onPhaseChange(from, to) {
     if (S.goLiveOnBoot) { S.goLiveOnBoot = false; if (S.tab !== 'live') setTab('live'); }
     pollStats(); if (S.tab === 'files') loadDir(S.path);
   }
-  if (to === 'online') { pollStats(); pollHealth(true); if (S.tab === 'files') loadDir(S.path); if (S.tab === 'photos') loadPhotos(); if (S.tab === 'trash') loadTrash(); }
+  if (to === 'online') { pollStats(); pollHealth(true); if (S.tab === 'files') loadDir(S.path); if (S.tab === 'photos') loadPhotos(); if (S.tab === 'trash') loadTrash(); if (S.tab === 'cloud') loadCloud(); }
   if (to !== 'online') renderHealth();
   if (to === 'offline' && (from === 'shutting-down' || from === 'online')) { S.stats = null; renderStats(); }
   if (to !== 'online') { if (S.tab === 'files') renderFiles(); }
@@ -281,13 +282,11 @@ async function powerOn() {
       if (r.already) return toast('Server is already on', 'ok');
       if (r.openUrl) window.open(r.openUrl, '_blank', 'noopener'); // home-Wi-Fi plug link
       S.wakeAt = Date.now(); S.goLiveOnBoot = true;
-      toast('Smart plug ON — server is starting…'); setTab('live'); refreshState();
+      toast(r.waker ? `Wake signal sent through “${r.waker}” — server is starting…` : 'Smart plug ON — server is starting…');
+      if (r.plugErr) toast('Smart plug: ' + r.plugErr, 'err');
+      setTab('live'); refreshState();
     } catch (e) {
-      if (/No smart plug/i.test(e.message)) {
-        const ok = await modal({ title: 'Power On with Wake-on-LAN', text: 'On your home Wi-Fi? Double-click the "Pryme Power On" file on your laptop — it wakes the server in seconds. Download it once and keep it on your Desktop. (From outside home, Power On needs a smart plug.)', ok: 'Download Power On file', cancel: 'Close' });
-        if (ok) location.href = '/local/wol.bat';
-        return;
-      }
+      if (/No Pryme Waker|No smart plug/i.test(e.message)) return showWakerSetup();
       toast(e.message, 'err');
     }
     return;
@@ -404,8 +403,8 @@ async function pollHealth(force) {
   } catch {} finally { healthBusy = false; }
 }
 setInterval(() => { if (S.tab === 'home') pollHealth(); }, 5000);
-const APP_IC = { samba: '🗂️', smart: '🩺', backup: '🔁', jellyfin: '🎬', cloud: '☁️', wol: '⚡', ssh: '⌨️' };
-const APP_TXT = { samba: 'Map as a network drive in File Explorer', smart: 'Warns before a disk fails', backup: 'Copies a folder to another drive every day', jellyfin: 'Watch movies & music on TV / phone', cloud: 'Open Pryme from anywhere', wol: 'Power On over the network', ssh: 'Command line from your laptop' };
+const APP_IC = { cbackup: '☁️', samba: '🗂️', smart: '🩺', backup: '🔁', jellyfin: '🎬', cloud: '☁️', wol: '⚡', ssh: '⌨️' };
+const APP_TXT = { cbackup: 'Google Drive · OneDrive · iCloud', samba: 'Map as a network drive in File Explorer', smart: 'Warns before a disk fails', backup: 'Copies a folder to another drive every day', jellyfin: 'Watch movies & music on TV / phone', cloud: 'Open Pryme from anywhere', wol: 'Power On over the network', ssh: 'Command line from your laptop' };
 function renderHealth() {
   const h = S.health, online = S.phase === 'online';
   const binTxt = S.trash ? fmtBytes(S.trash.size) : '—';
@@ -423,7 +422,7 @@ function renderHealth() {
   $('#shieldSub').textContent = sf.recovered && sf.recovered.at ? `Power was lost around ${fmtDate(sf.recovered.at)} — disks were checked automatically` : cuts[0] && cuts[0].at ? `Last one: ${fmtDate(cuts[0].at)} · No UPS — software protection is on` : 'No UPS · software protection keeps your files safe';
   $('#shieldChecks').innerHTML = (sf.checks || []).map(c => `<li class="${c.ok ? 'ok' : ''}" title="${esc(c.info || '')}">${esc(c.label)}${c.optional ? ' <span class="muted">(optional)</span>' : ''}</li>`).join('');
   $('#apps').innerHTML = (h.services || []).map(a => `<div class="tile app-tile"><div class="app-h"><span class="app-ic">${APP_IC[a.id] || '•'}</span><span class="dot ${a.on ? 'on' : 'off'}"></span></div>
-    <b>${esc(a.name)}</b><span class="sub">${a.on ? (a.id === 'backup' && a.last ? 'Last backup: ' + fmtDate(a.last.at) + (a.last.ok ? ' ✓' : ' ✗') : APP_TXT[a.id] || 'Running') : a.on === null ? 'Unknown' : 'Not set up · see README'}</span>
+    <b>${esc(a.name)}</b><span class="sub">${a.on ? ((a.id === 'backup' || a.id === 'cbackup') && a.last ? 'Last backup: ' + fmtDate(a.last.at) + (a.last.ok ? ' ✓' : ' ✗') : APP_TXT[a.id] || 'Running') : a.on === null ? 'Unknown' : 'Not set up · see README'}</span>
     ${a.url && a.on ? (a.url.startsWith('http') ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">Open ↗</a>` : `<a title="Copy" data-copy="${esc(a.url)}" href="#">${esc(a.url)}</a>`) : ''}</div>`).join('');
   $$('#apps [data-copy]').forEach(x => (x.onclick = ev => { ev.preventDefault(); navigator.clipboard && navigator.clipboard.writeText(x.dataset.copy).then(() => toast('Copied — paste it in File Explorer', 'ok')); }));
 }
@@ -901,7 +900,7 @@ function renderCloudCard() {
   }
 }
 function renderSettings() {
-  renderCloudCard();
+  renderCloudCard(); renderWakerCard();
   const wb = $('#cloudCardBody');
   if (wb && !$('#wolLine')) wb.insertAdjacentHTML('beforeend', `<p id="wolLine">💡 <b>Wake-on-LAN Power On:</b> <a href="/local/wol.bat">download "Pryme Power On" for Windows</a> — keep it on your laptop Desktop and double-click it on home Wi-Fi.</p>`);
   const s = S.st || {}, srv = s.server || {};
@@ -920,6 +919,182 @@ $('#unlinkBtn').onclick = async () => {
   if (!(await modal({ title: 'Unlink this PC?', text: 'You will need to link again with your server username & password.', ok: 'Unlink', danger: true }))) return;
   await post('/local/unlink').catch(() => {}); location.reload();
 };
+
+/* ---------------- Sheet (big dialog) ---------------- */
+function sheet(html) { $('#sheetCard').innerHTML = html; $('#sheet').classList.remove('hidden'); $('#sheet').onclick = e => { if (e.target.id === 'sheet') closeSheet(); }; $$('[data-close]', $('#sheetCard')).forEach(b => (b.onclick = closeSheet)); }
+function closeSheet() { $('#sheet').classList.add('hidden'); $('#sheetCard').innerHTML = ''; }
+
+/* ---------------- Power On button (Pryme Waker) ---------------- */
+function wakerBase() { return S.cloudMode ? location.origin : (S.st && S.st.cloudUrl) || ''; }
+function showWakerSetup() {
+  const base = wakerBase();
+  sheet(`<div class="sheet-h"><h3>⚡ Make the Power On button work</h3><button class="icon-btn" data-close>${ico('x')}</button></div>
+  <div class="sheet-b">
+    <p class="muted" style="margin-top:0">When the server is off, something <b>at home that is always on</b> has to send the wake signal. Set it up once — then <b>Power On</b> works from anywhere.</p>
+    <div class="note"><b>Option 1 · A Windows PC at home that stays on</b> (e.g. the CCTV PC)
+      <ol class="steps" style="margin-top:8px"><li>${base ? `<a class="btn sm primary" href="${esc(base)}/waker.ps1">${ico('download')}Download Pryme Waker for Windows</a>` : 'Set up Pryme Cloud first (Settings).'}</li>
+      <li>On that PC: right-click the file → <b>Run with PowerShell</b> → type your Pryme username &amp; password.</li>
+      <li>Done. It starts hidden with Windows. Keep the PC on and connected to the router.</li></ol></div>
+    <div class="note"><b>Option 2 · An old Android phone on its charger</b> (free)
+      <ol class="steps" style="margin-top:8px"><li>Install <b>Termux</b> from F-Droid, open it and run:</li></ol>
+      <div class="code">pkg install -y nodejs curl
+curl -o pryme-waker.js ${esc(base || 'https://YOUR-APP.onrender.com')}/waker.js
+node pryme-waker.js</div>
+      Keep the phone on Wi-Fi and plugged in. In Android settings, turn off battery optimisation for Termux.</div>
+    <div class="note"><b>Option 3 · A Wi-Fi smart plug</b> (Tuya / Smart Life) — see README section 10.</div>
+    <div class="note"><b>Right now, on home Wi-Fi:</b> <a href="/local/wol.bat">download the one-click Power On file</a> for this laptop.</div>
+  </div><div class="sheet-f"><button class="btn" data-close>Close</button></div>`);
+}
+function renderWakerCard() {
+  const w = S.st && S.st.waker, el = $('#wakerBody'); if (!el) return;
+  const status = S.cloudMode ? (w && w.online ? `<span class="ok-txt">● Ready</span> — Power On goes through <b>${esc(w.name || 'Pryme Waker')}</b>.` : '<span class="muted">● No waker connected yet.</span>') : '';
+  el.innerHTML = `<p style="margin:0 0 12px">${status || 'Let the Power On button switch the server on from anywhere — no files to click.'}</p><button class="btn sm primary" id="wakerSetup">${ico('bolt')}Set up Power On button</button>`;
+  $('#wakerSetup').onclick = showWakerSetup;
+}
+
+/* ---------------- Cloud Backup ---------------- */
+const ACC = {
+  gdrive: { logo: 'G', bg: 'linear-gradient(135deg,#1fa463,#4285f4 55%,#fbbc04)', note: 'Sign in with Google.' },
+  onedrive: { logo: '☁', bg: 'linear-gradient(135deg,#0364b8,#28a8ea)', note: 'Sign in with Microsoft.' },
+  icloud: { logo: '☁', bg: 'linear-gradient(135deg,#3a3a3c,#8e8e93)', note: 'Apple ID + 2-factor code.' },
+  icloudphotos: { logo: '❀', bg: 'linear-gradient(135deg,#ff9f0a,#ff375f 50%,#bf5af2)', note: 'Apple ID + 2-factor code.' },
+};
+let cbBusy = false;
+async function cloudCall(action, extra) { return post('/api/cloud', { action, ...(extra || {}) }); }
+async function loadCloud() {
+  if (S.phase !== 'online') { $('#cbAccounts').innerHTML = `<div class="empty-sm">Turn the server on to manage cloud backups.</div>`; $('#cbJobs').innerHTML = ''; return; }
+  if (cbBusy) return; cbBusy = true;
+  try { S.cb = await cloudCall('status'); } catch (e) { $('#cbAccounts').innerHTML = `<div class="empty-sm">${esc(e.message)}</div>`; return; } finally { cbBusy = false; }
+  renderCloud();
+}
+setInterval(() => { if (S.tab === 'cloud' && S.cb && S.cb.jobs.some(j => j.running)) loadCloud(); }, 2500);
+function renderCloud() {
+  const c = S.cb; if (!c) return;
+  $('#cbVer').textContent = c.rclone ? `rclone v${c.rclone}` : '';
+  if (!c.rclone) { $('#cbAccounts').innerHTML = `<div class="empty-sm">Cloud backup needs <b>rclone</b>. On the server run <code>sudo bash ~/pryme-server-pc/server-agent/install.sh</code></div>`; $('#cbJobs').innerHTML = ''; return; }
+  $('#cbAccounts').innerHTML = c.accounts.map(a => {
+    const k = ACC[a.id], icl = a.id.startsWith('icloud') && !c.icloud;
+    return `<div class="tile acc"><div class="acc-h"><span class="acc-logo" style="background:${k.bg}">${k.logo}</span><div><b>${esc(a.label)}</b><span class="sub">${a.connected ? '<span class="ok-txt">● Connected</span>' : icl ? 'Needs a newer rclone (re-run install.sh)' : k.note}</span></div></div>
+      <div class="row-gap">${a.connected ? `<button class="btn sm primary" data-newfrom="${a.id}">${ico('cloud')}Back up</button><button class="btn sm" data-disc="${a.id}">Disconnect</button>` : `<button class="btn sm primary" data-conn="${a.id}" ${icl ? 'disabled' : ''}>Connect</button>`}</div></div>`;
+  }).join('');
+  $$('[data-conn]').forEach(b => (b.onclick = () => connectAcc(b.dataset.conn)));
+  $$('[data-disc]').forEach(b => (b.onclick = async () => { if (!(await modal({ title: 'Disconnect this account?', text: 'Backups already on the server stay. Backup jobs for it stop working until you connect again.', ok: 'Disconnect', danger: true }))) return; try { await cloudCall('disconnect', { id: b.dataset.disc }); loadCloud(); } catch (e) { toast(e.message, 'err'); } }));
+  $$('[data-newfrom]').forEach(b => (b.onclick = () => jobWizard({ remote: b.dataset.newfrom })));
+  const jobs = c.jobs;
+  $('#cbJobs').innerHTML = jobs.length ? jobs.map(j => {
+    const r = j.running, k = ACC[j.remote] || {}, pct = r && r.total ? Math.round(r.bytes / r.total * 100) : 0;
+    const when = j.schedule === 'manual' ? 'Manual' : `${j.schedule === 'weekly' ? 'Weekly' : 'Daily'} at ${String(j.hour).padStart(2, '0')}:00`;
+    const last = r ? `Backing up… ${fmtBytes(r.bytes)}${r.total ? ' / ' + fmtBytes(r.total) : ''} · ${r.files}${r.totalFiles ? '/' + r.totalFiles : ''} files · ${fmtRate(r.speed)}`
+      : j.last ? `${j.last.ok ? '✓' : '✗'} ${fmtDate(j.last.at)} · ${fmtBytes(j.last.bytes || 0)} · ${esc(j.last.msg)}` : 'Not run yet';
+    return `<div class="tile job"><span class="acc-logo" style="background:${k.bg || 'var(--tile2)'}">${k.logo || '☁'}</span>
+      <div style="min-width:0"><b>${esc(j.name)}</b><span class="sub">${esc(j.items.map(i => i.path || '(everything)').join(', '))} → ${esc(j.drive)}/Cloud Backup · ${when}</span>
+      ${r ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ''}<span class="sub">${last}</span></div>
+      <div class="row-gap">${r ? `<button class="btn sm" data-stop="${j.id}">Stop</button>` : `<button class="btn sm primary" data-run="${j.id}">Run now</button>`}<button class="btn sm" data-edit="${j.id}">Edit</button><button class="btn sm danger" data-del="${j.id}">${ico('trash')}</button></div></div>`;
+  }).join('') : `<div class="empty-sm">No backups yet. Connect an account, then press <b>New backup</b>.</div>`;
+  $$('[data-run]').forEach(b => (b.onclick = async () => { try { await cloudCall('jobRun', { id: b.dataset.run }); toast('Backup started', 'ok'); setTimeout(loadCloud, 800); } catch (e) { toast(e.message, 'err'); } }));
+  $$('[data-stop]').forEach(b => (b.onclick = async () => { await cloudCall('jobStop', { id: b.dataset.stop }).catch(() => {}); setTimeout(loadCloud, 800); }));
+  $$('[data-edit]').forEach(b => (b.onclick = () => jobWizard(jobs.find(j => j.id === b.dataset.edit))));
+  $$('[data-del]').forEach(b => (b.onclick = async () => { if (!(await modal({ title: 'Delete this backup job?', text: 'Files already backed up stay on the server.', ok: 'Delete', danger: true }))) return; await cloudCall('jobDelete', { id: b.dataset.del }).catch(e => toast(e.message, 'err')); loadCloud(); }));
+}
+$('#cbNew').onclick = () => {
+  const acc = S.cb && S.cb.accounts.find(a => a.connected);
+  if (!acc) return toast('Connect an account first', 'err');
+  jobWizard({ remote: acc.id });
+};
+async function connectAcc(id) {
+  const label = S.cb.accounts.find(a => a.id === id).label;
+  if (id.startsWith('icloud')) {
+    sheet(`<div class="sheet-h"><h3>Connect ${esc(label)}</h3><button class="icon-btn" data-close>${ico('x')}</button></div><div class="sheet-b">
+      <div class="note">Before you start, on your iPhone: <b>Settings → [your name] → iCloud</b> → turn <b>Advanced Data Protection OFF</b> and <b>Access iCloud Data on the Web ON</b>. App-specific passwords do not work — use your normal Apple ID password.</div>
+      <label class="field" style="margin-top:14px"><span>Apple ID (email)</span><input id="icId" autocomplete="username"></label>
+      <label class="field"><span>Apple ID password</span><input id="icPw" type="password" autocomplete="current-password"></label>
+      <div id="icCodeWrap" class="hidden"><label class="field"><span>6-digit code from your iPhone / Mac</span><input id="icCode" inputmode="numeric" maxlength="8"></label></div>
+      <p class="form-err" id="icErr"></p><p class="muted small">Apple asks you to sign in again about every 30 days — Pryme will show it here.</p></div>
+      <div class="sheet-f"><button class="btn" data-close>Cancel</button><button class="btn primary" id="icGo">Continue</button></div>`);
+    let stage = 'creds';
+    $('#icGo').onclick = async () => {
+      const go = $('#icGo'); go.disabled = true; $('#icErr').textContent = '';
+      try {
+        if (stage === 'creds') {
+          go.textContent = 'Signing in…';
+          const r = await cloudCall('icloudStart', { id, appleId: $('#icId').value.trim(), password: $('#icPw').value });
+          if (r.needCode) { stage = 'code'; $('#icCodeWrap').classList.remove('hidden'); $('#icCode').focus(); go.textContent = 'Confirm code'; go.disabled = false; return; }
+        } else {
+          go.textContent = 'Checking…';
+          const r = await cloudCall('icloudCode', { id, code: $('#icCode').value });
+          if (r.needCode) { $('#icErr').textContent = 'Enter the new code'; go.textContent = 'Confirm code'; go.disabled = false; return; }
+        }
+        closeSheet(); toast(label + ' connected', 'ok'); loadCloud();
+      } catch (e) { $('#icErr').textContent = e.message; go.disabled = false; go.textContent = stage === 'code' ? 'Confirm code' : 'Continue'; }
+    };
+    return;
+  }
+  sheet(`<div class="sheet-h"><h3>Connect ${esc(label)}</h3><button class="icon-btn" data-close>${ico('x')}</button></div><div class="sheet-b">
+    <ol class="steps"><li><b>Sign in.</b> Press the button — a new tab opens.<br><button class="btn primary sm" id="oaOpen" style="margin-top:8px">${ico('open')}Sign in to ${esc(label)}</button></li>
+    <li><b>Allow access.</b> After you press Allow, the tab shows <b>“This site can’t be reached”</b> (127.0.0.1). <b>That is normal.</b></li>
+    <li><b>Copy that tab's address</b> (it starts with <code>http://127.0.0.1:53682/</code>) and paste it here:<input id="oaUrl" placeholder="http://127.0.0.1:53682/?state=…&code=…" style="margin-top:8px"></li></ol>
+    <p class="form-err" id="oaErr"></p></div>
+    <div class="sheet-f"><button class="btn" data-close>Cancel</button><button class="btn primary" id="oaDone" disabled>Finish</button></div>`);
+  const open = $('#oaOpen'), win = window.open('about:blank', '_blank');
+  open.disabled = true; open.lastChild.textContent = 'Preparing sign-in…';
+  try {
+    const r = await cloudCall('connectStart', { id });
+    if (win) { win.location = r.authUrl; } else open.onclick = () => window.open(r.authUrl, '_blank');
+    open.onclick = () => window.open(r.authUrl, '_blank'); open.disabled = false; open.lastChild.textContent = 'Open sign-in again';
+    $('#oaDone').disabled = false;
+  } catch (e) { if (win) win.close(); $('#oaErr').textContent = e.message; }
+  $('#oaDone').onclick = async () => {
+    const b = $('#oaDone'); b.disabled = true; b.textContent = 'Connecting…'; $('#oaErr').textContent = '';
+    try { await cloudCall('connectFinish', { id, url: $('#oaUrl').value }); closeSheet(); toast(label + ' connected', 'ok'); loadCloud(); }
+    catch (e) { $('#oaErr').textContent = e.message; b.disabled = false; b.textContent = 'Finish'; }
+  };
+}
+async function jobWizard(job) {
+  const c = S.cb, conn = c.accounts.filter(a => a.connected);
+  const j = { name: '', items: [], drive: c.drives[0], schedule: 'daily', hour: 2, ...job };
+  if (!j.drive && !c.drives.length) return toast('Add a drive to the server first', 'err');
+  const sel = new Map(j.items.map(i => [i.path, i]));
+  let cur = '';
+  sheet(`<div class="sheet-h"><h3>${job.id ? 'Edit backup' : 'New backup'}</h3><button class="icon-btn" data-close>${ico('x')}</button></div><div class="sheet-b">
+    <div class="form-row"><label class="field"><span>Account</span><select id="wzAcc">${conn.map(a => `<option value="${a.id}" ${a.id === j.remote ? 'selected' : ''}>${esc(a.label)}</option>`).join('')}</select></label>
+    <label class="field"><span>Name</span><input id="wzName" value="${esc(j.name)}" placeholder="e.g. My photos"></label></div>
+    <span class="lbl">Choose what to back up — tick folders or files, click a folder to open it</span>
+    <nav class="crumbs" id="wzCrumbs" style="margin-top:8px"></nav>
+    <div class="pick-list" id="wzList"></div>
+    <div class="chips" id="wzChips"></div>
+    <div class="form-row"><label class="field"><span>Save on drive</span><select id="wzDrive">${c.drives.map(d => `<option ${d === j.drive ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></label>
+    <label class="field"><span>When</span><select id="wzWhen"><option value="daily">Every day</option><option value="weekly">Every week</option><option value="manual">Only when I press Run</option></select></label></div>
+    <label class="field" id="wzHourWrap"><span>Time (if the server is off then, it runs as soon as it is on)</span><select id="wzHour">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === j.hour ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('')}</select></label>
+    <p class="form-err" id="wzErr"></p></div>
+    <div class="sheet-f"><button class="btn" data-close>Cancel</button><button class="btn" id="wzSave">Save</button><button class="btn primary" id="wzSaveRun">Save &amp; run now</button></div>`);
+  $('#wzWhen').value = j.schedule; $('#wzHourWrap').classList.toggle('hidden', j.schedule === 'manual');
+  $('#wzWhen').onchange = () => $('#wzHourWrap').classList.toggle('hidden', $('#wzWhen').value === 'manual');
+  const chips = () => { $('#wzChips').innerHTML = sel.size ? [...sel.values()].map(i => `<span>${i.dir ? '📁' : '📄'} ${esc(i.path || 'Everything')}</span>`).join('') : '<span class="muted small" style="background:none">Nothing selected yet</span>'; };
+  async function open(p) {
+    cur = p; const parts = p ? p.split('/') : [];
+    $('#wzCrumbs').innerHTML = [`<button data-p="">${esc(conn.find(a => a.id === $('#wzAcc').value).label)}</button>`].concat(parts.map((x, i) => `<i>›</i><button data-p="${esc(parts.slice(0, i + 1).join('/'))}">${esc(x)}</button>`)).join('');
+    $$('#wzCrumbs button').forEach(b => (b.onclick = () => open(b.dataset.p)));
+    $('#wzList').innerHTML = `<div class="fempty" style="padding:30px"><div class="spinner" style="margin:0 auto;border-color:var(--border2);border-top-color:var(--accent)"></div></div>`;
+    let r; try { r = await cloudCall('browse', { id: $('#wzAcc').value, path: p }); } catch (e) { $('#wzList').innerHTML = `<div class="fempty" style="padding:24px"><b>${esc(e.message)}</b></div>`; return; }
+    const rows = (p === '' ? [{ name: '(Everything in this account)', dir: true, all: true }] : []).concat(r.items);
+    $('#wzList').innerHTML = rows.length ? rows.map((i, n) => { const fp = i.all ? '' : (p ? p + '/' : '') + i.name; return `<div class="pick" data-n="${n}" data-p="${esc(fp)}" data-dir="${i.dir ? 1 : 0}"><input type="checkbox" ${sel.has(fp) ? 'checked' : ''}>${fileIcon({ name: i.name, dir: i.dir })}<span>${esc(i.name)}</span><small>${i.dir ? (i.all ? '' : 'Open ›') : fmtBytes(i.size)}</small></div>`; }).join('') : `<div class="fempty" style="padding:24px">Empty folder</div>`;
+    $$('#wzList .pick').forEach(row => {
+      const fp = row.dataset.p, dir = row.dataset.dir === '1';
+      $('input', row).onclick = ev => { ev.stopPropagation(); ev.target.checked ? sel.set(fp, { path: fp, dir }) : sel.delete(fp); chips(); };
+      row.onclick = () => { if (dir && fp !== '' ) open(fp); else { const cb = $('input', row); cb.checked = !cb.checked; cb.checked ? sel.set(fp, { path: fp, dir }) : sel.delete(fp); chips(); } };
+    });
+  }
+  $('#wzAcc').onchange = () => { sel.clear(); chips(); open(''); };
+  const save = async runNow => {
+    $('#wzErr').textContent = '';
+    try {
+      await cloudCall('jobSave', { runNow, job: { id: job.id, remote: $('#wzAcc').value, name: $('#wzName').value.trim(), items: [...sel.values()], drive: $('#wzDrive').value, schedule: $('#wzWhen').value, hour: Number($('#wzHour').value) } });
+      closeSheet(); toast(runNow ? 'Backup saved — running now' : 'Backup saved', 'ok'); loadCloud();
+    } catch (e) { $('#wzErr').textContent = e.message; }
+  };
+  $('#wzSave').onclick = () => save(false); $('#wzSaveRun').onclick = () => save(true);
+  chips(); open('');
+}
 
 /* ---------------- start ---------------- */
 setInterval(() => { if (S.st && S.st.loggedIn) { if (S.phase === 'booting') renderStatus(); if (S.tab === 'settings') renderSettings(); } if (!S.st || !S.st.configured) { if (!$('#setupForm').classList.contains('hidden')) renderDisc(); } }, 1000);
