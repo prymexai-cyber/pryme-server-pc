@@ -19,7 +19,7 @@ const crypto = require('crypto');
 const dgram = require('dgram');
 const { spawn, execFile } = require('child_process');
 
-const VERSION = '3.0.0';
+const VERSION = '3.1.0';
 const CONFIG_PATH = process.env.PRYME_CONFIG || '/etc/pryme/config.json';
 const BEACON_PORT = 7101;
 const DRY = process.env.PRYME_DRYRUN === '1';
@@ -775,6 +775,9 @@ const RCLONE_CONF = process.env.PRYME_RCLONE_CONFIG || path.join(path.dirname(CO
 const rcEnv = () => ({ ...process.env, RCLONE_CONFIG: RCLONE_CONF });
 const PROVIDERS = {
   gdrive: { type: 'drive', label: 'Google Drive', folder: 'Google Drive', oauth: 'drive' },
+  // Google stopped letting apps read a whole Photos library (Mar 2025). Google Takeout can export
+  // Google Photos into Google Drive every 2 months; Pryme picks those archives up and unzips them.
+  gphotos: { via: 'gdrive', label: 'Google Photos', folder: 'Google Photos', takeout: true },
   onedrive: { type: 'onedrive', label: 'OneDrive', folder: 'OneDrive', oauth: 'onedrive' },
   icloud: { type: 'iclouddrive', label: 'iCloud Drive', folder: 'iCloud Drive', service: 'drive' },
   icloudphotos: { type: 'iclouddrive', label: 'iCloud Photos', folder: 'iCloud Photos', service: 'photos' },
@@ -809,7 +812,7 @@ async function remotes() {
   const r = await rc(['listremotes', '--long'], { timeout: 15000 });
   const have = {};
   for (const l of r.out.split('\n')) { const m = /^(\S+):\s+(\S+)/.exec(l.trim()); if (m) have[m[1]] = m[2]; }
-  return Object.entries(PROVIDERS).map(([id, p]) => ({ id, label: p.label, connected: !!have[id] }));
+  return Object.entries(PROVIDERS).map(([id, p]) => ({ id, label: p.label, connected: !!have[p.via || id], via: p.via || null }));
 }
 let authProc = null;
 function killAuth() { if (authProc) { try { authProc.proc.kill(); } catch {} authProc = null; } }
@@ -870,6 +873,7 @@ async function icloudCode(id, code) {
 }
 async function browse(id, p) {
   if (!PROVIDERS[id]) throw new HttpErr(400, 'Unknown account');
+  if (PROVIDERS[id].via) id = PROVIDERS[id].via;
   const clean = String(p || '').replace(/^\/+|\/+$/g, '');
   const r = await rc(['lsjson', `${id}:${clean}`, '--max-depth', '1', '--no-mimetype'], { timeout: 90000 });
   if (r.code) throw new HttpErr(502, rcErr(r));
@@ -893,7 +897,10 @@ async function runJob(id) {
   running.set(id, run);
   (async () => {
     let ok = true, msg = 'Done';
-    for (let i = 0; i < j.items.length && !run.stop; i++) {
+    if (PROVIDERS[j.remote] && PROVIDERS[j.remote].takeout) {
+      try { msg = await runTakeout(j, run); } catch (e) { ok = false; msg = e.message || 'Failed'; }
+    }
+    else for (let i = 0; i < j.items.length && !run.stop; i++) {
       const it = j.items[i]; run.item = i;
       const dest = jobDest(j, it); fs.mkdirSync(dest, { recursive: true });
       const src = `${j.remote}:${it.path}`;
@@ -918,6 +925,56 @@ async function runJob(id) {
   })();
   return { ok: true };
 }
+// rclone copy/copyto with live progress into `run`
+function rcTransfer(args, run) {
+  return new Promise(done => {
+    const p = spawn('rclone', [...args, '--stats', '2s', '--stats-log-level', 'NOTICE', '--use-json-log', '-v', '--retries', '3'], { env: rcEnv() });
+    run.proc = p; let lastErr = '', buf = ''; const base = run.bytes;
+    const onLine = l => { let o; try { o = JSON.parse(l); } catch { return; } if (o.stats) { run.bytes = base + (o.stats.bytes || 0); run.speed = o.stats.speed || 0; } if (o.level === 'error') lastErr = o.msg; };
+    p.stderr.on('data', d => { buf += d; let k; while ((k = buf.indexOf('\n')) >= 0) { onLine(buf.slice(0, k)); buf = buf.slice(k + 1); } });
+    p.on('error', e => done({ code: -1, err: e.code === 'ENOENT' ? 'rclone is not installed' : e.message }));
+    p.on('close', code => done({ code, err: lastErr }));
+  });
+}
+const runCmd = (cmd, args, run) => new Promise(done => {
+  const p = spawn(cmd, args); if (run) run.proc = p; let err = '';
+  p.stderr.on('data', d => (err = (err + d).slice(-400))); p.stdout.resume();
+  p.on('error', e => done({ code: -1, err: e.code === 'ENOENT' ? `${cmd} is not installed — run install.sh again` : e.message }));
+  p.on('close', code => done({ code, err: err.trim() }));
+});
+// Google Photos via Google Takeout: Drive/Takeout/*.zip|.tgz  →  <drive>/Cloud Backup/Google Photos/<album>/...
+async function runTakeout(j, run) {
+  const base = path.join(ROOT, j.drive, 'Cloud Backup', PROVIDERS[j.remote].folder), stage = path.join(base, '.takeout');
+  fs.mkdirSync(stage, { recursive: true });
+  const l = await rc(['lsjson', 'gdrive:Takeout', '--files-only', '--no-mimetype'], { timeout: 120000 });
+  if (l.code) { if (/not found|doesn't exist/i.test(l.err)) throw new Error('No Takeout export in your Google Drive yet — see "How it works"'); throw new Error(rcErr(l)); }
+  let list = []; try { list = JSON.parse(l.out || '[]'); } catch {}
+  j.done = Array.isArray(j.done) ? j.done : [];
+  const todo = list.filter(f => /\.(zip|tgz|tar\.gz)$/i.test(f.Name) && !j.done.includes(f.Name + '|' + f.Size)).sort((a, b) => a.Name.localeCompare(b.Name));
+  if (!todo.length) return list.length ? 'Up to date — no new Takeout export' : 'No Takeout export in your Google Drive yet';
+  run.total = todo.reduce((a, f) => a + (f.Size || 0), 0); run.totalFiles = todo.length;
+  let n = 0;
+  for (const f of todo) {
+    if (run.stop) break;
+    const file = path.join(stage, f.Name), x = path.join(stage, 'x');
+    const r = await rcTransfer(['copyto', `gdrive:Takeout/${f.Name}`, file], run);
+    if (r.code) throw new Error(r.err || 'Download failed: ' + f.Name);
+    if (run.stop) break;
+    fs.rmSync(x, { recursive: true, force: true }); fs.mkdirSync(x, { recursive: true });
+    const u = /\.zip$/i.test(f.Name) ? await runCmd('unzip', ['-o', '-q', file, '-x', '*.json', '-d', x], run)
+      : await runCmd('tar', ['-xzf', file, '--exclude=*.json', '-C', x], run);
+    if (u.code === -1 || u.code > 1) throw new Error('Could not unzip ' + f.Name + (u.err ? ': ' + u.err : ''));
+    // Takeout/<"Google Photos" in your language>/<album>/files
+    const tk = path.join(x, 'Takeout'); let src = fs.existsSync(tk) ? tk : x;
+    if (src === tk) { const d = fs.readdirSync(tk).find(n => /photo|foto|照片|写真/i.test(n)) || fs.readdirSync(tk)[0]; if (d) src = path.join(tk, d); }
+    const c = await runCmd('cp', ['-a', src + '/.', base + '/'], run);
+    fs.rmSync(x, { recursive: true, force: true }); fs.rmSync(file, { force: true });
+    if (c.code) throw new Error('Could not save photos: ' + c.err);
+    j.done.push(f.Name + '|' + f.Size); n++; run.files = n; saveCfg();
+  }
+  try { fs.rmdirSync(stage); } catch {}
+  return n ? `Imported ${n} Takeout file${n > 1 ? 's' : ''}` : 'Stopped';
+}
 setInterval(() => {
   const now = Date.now(), h = new Date().getHours();
   for (const j of cfg.cloudJobs) {
@@ -928,7 +985,7 @@ setInterval(() => {
     if (due) runJob(j.id).catch(() => {});
   }
 }, 60000).unref();
-const jobView = j => { const r = running.get(j.id); return { ...j, label: PROVIDERS[j.remote] ? PROVIDERS[j.remote].label : j.remote, running: r ? { bytes: r.bytes, total: r.total, files: r.files, totalFiles: r.totalFiles, speed: r.speed, item: r.item, started: r.started } : null }; };
+const jobView = j => { const r = running.get(j.id); return { ...j, done: undefined, label: PROVIDERS[j.remote] ? PROVIDERS[j.remote].label : j.remote, running: r ? { bytes: r.bytes, total: r.total, files: r.files, totalFiles: r.totalFiles, speed: r.speed, item: r.item, started: r.started } : null }; };
 async function cloudOp(b) {
   switch (b.action) {
     case 'status': {
@@ -943,6 +1000,7 @@ async function cloudOp(b) {
     case 'icloudCode': return icloudCode(b.id, b.code);
     case 'disconnect': {
       if (!PROVIDERS[b.id]) throw new HttpErr(400, 'Unknown account');
+      if (PROVIDERS[b.id].via) throw new HttpErr(400, 'Google Photos uses your Google Drive connection — disconnect Google Drive instead');
       await rc(['config', 'delete', b.id], { timeout: 15000 });
       return { ok: true };
     }
@@ -950,13 +1008,13 @@ async function cloudOp(b) {
     case 'jobSave': {
       const j = b.job || {};
       if (!PROVIDERS[j.remote]) throw new HttpErr(400, 'Choose an account');
-      const items = (Array.isArray(j.items) ? j.items : []).map(i => ({ path: String(i.path || '').replace(/^\/+|\/+$/g, ''), dir: !!i.dir })).filter(i => i.path || i.dir);
+      const items = PROVIDERS[j.remote].takeout ? [{ path: 'Takeout', dir: true }] : (Array.isArray(j.items) ? j.items : []).map(i => ({ path: String(i.path || '').replace(/^\/+|\/+$/g, ''), dir: !!i.dir })).filter(i => i.path || i.dir);
       if (!items.length) throw new HttpErr(400, 'Choose at least one folder or file');
       if (!(await driveList()).some(d => d.name === j.drive)) throw new HttpErr(400, 'Choose a destination drive');
       const job = { id: j.id || crypto.randomBytes(5).toString('hex'), name: String(j.name || PROVIDERS[j.remote].label + ' backup').slice(0, 60), remote: j.remote, items,
         drive: j.drive, schedule: ['daily', 'weekly', 'manual'].includes(j.schedule) ? j.schedule : 'daily', hour: Math.min(23, Math.max(0, Number(j.hour) || 2)) };
       const old = cfg.cloudJobs.findIndex(x => x.id === job.id);
-      if (old >= 0) { job.last = cfg.cloudJobs[old].last; cfg.cloudJobs[old] = job; } else cfg.cloudJobs.push(job);
+      if (old >= 0) { job.last = cfg.cloudJobs[old].last; if (cfg.cloudJobs[old].remote === job.remote) job.done = cfg.cloudJobs[old].done; cfg.cloudJobs[old] = job; } else cfg.cloudJobs.push(job);
       saveCfg();
       if (b.runNow) runJob(job.id).catch(() => {});
       return { ok: true, id: job.id };
