@@ -1,4 +1,4 @@
-# Pryme Server PC 🖥️⚡ (v2)
+# Pryme Server PC 🖥️⚡ (v3)
 
 පරණ Samsung i3 PC එක **ඔයාගේම storage server** එකක් කරන system එක.
 **Laptop / phone එකට කිසිම දෙයක් install කරන්න ඕන නෑ** — WiFi එකට connect වෙලා browser එක open කරාම ඇති.
@@ -7,7 +7,9 @@
 - ⚡ **Power On** (smart plug එකෙන්), **Shut Down**, **Restart** — ඔබපු ගමන්ම
 - 🖥️ Xubuntu desktop එක **Live Screen** එකෙන් බලන්න + mouse/keyboard එකෙන් control කරන්න
 - 📁 හැම hard drive එකකම files එක තැනකින් — upload, download (folder එකක් නම් .zip), rename, delete, preview
-- 🌗 Dark / Light theme · 📱 phone එකටත් ගැලපෙනවා
+- 🌗 NAS-style tile dashboard (Dark / Light) · 📱 phone එකටත් ගැලපෙනවා
+- 🖼️ Photos gallery · 🗑️ Trash (දින 30ක් restore කරන්න පුළුවන්) · 🩺 Disk health · 🧩 Services panel
+- ⚡ Power-cut protection (UPS නැතුව) — section 11
 - ☁️ **Render** එකේ නිතරම on වෙලා තියෙන link එකක් — server එක OFF වෙලා තිබ්බත් open වෙනවා, ගෙදරින් පිට ඉඳන් වුණත් වැඩ
 
 ---
@@ -231,11 +233,25 @@ Reboot වුණාම Render link එක open කරලා login වෙන්�
 
 ---
 
-## 11. Current යනකොට ආරක්ෂාව
-- **UPS** (650–850VA, AVR එක්ක) — voltage spikes වලින් ආරක්ෂාව + current ගියාම server එක හරියට shutdown වෙන්න වෙලාව. USB port එකක් තියෙන එකක් ගත්තොත් auto-shutdown එකත් Pryme එකට එකතු කරන්න පුළුවන්.
-- UPS නැත්නම් අවම surge protector එකක්.
-- BIOS **Restore on AC Power Loss = Power On** → current ආපු ගමන් server එක auto on.
-- Data drives **ext4** නම් power cuts වලට ශක්තිමත් (NTFS ට වඩා). වැදගත් files වල backup එකක් තියාගන්න.
+## 11. ⚡ Current යනකොට ආරක්ෂාව (UPS නැතුව)
+`install.sh` එක auto ම මේවා හදනවා. Home → **Power-cut protection** tile එකේ ✅ ලෙස පේනවා:
+- **Fast flush (3 s)** — RAM එකේ තියෙන data තත්පර 3න් disk එකට ලියනවා (default 30s). Current ගියාම නැති වෙන දේ ගොඩක් අඩුයි.
+- **Auto-repair at boot** — current ගිහින් ආවම disks auto check කරලා හදනවා (keyboard ඕන නෑ).
+- **Crash-safe file systems (ext4)** — journal එකක් තියෙන නිසා power cut එකකින් file system එක කැඩෙන්නේ නෑ.
+- **Safe uploads** — upload වෙන file එක සම්පූර්ණයෙන් disk එකට ලිව්වට පස්සේ විතරයි පේන්නේ. බාගෙට ලියවුණ files නෑ.
+- **Power-cut detection** — server එක හරියට shutdown නොවී off වුණොත් Pryme එක ඒක මතක තියාගෙන Home එකේ පෙන්නනවා.
+- **Extra-safe mode (optional)** — disk write cache off (ආරක්ෂිතම, writes ~30% slow).
+- Disk health tiles: power cuts ගණන, temperature, පැය ගණන.
+
+⚠️ **Hardware ආරක්ෂාව software එකකට කරන්න බෑ.** Current එනකොට එන voltage spike එකෙන් motherboard / PSU එකට හානි වෙන්න පුළුවන්. ඒකට:
+- **Time-delay voltage guard** එකක් (fridge වලට ගන්න වර්ගය, විනාඩි 2-3 delay) — ලාභයි, spikes + current ආවා ගියා වෙන එකෙන් ආරක්ෂා කරනවා. **UPS එකක් ගන්නකම් අනිවාර්යයෙන් දාන්න.**
+- පුළුවන් වෙලාවක **UPS** (650–850VA, AVR එක්ක).
+
+## 11.5 🗄️ NAS extras (`nas-setup.sh`)
+```bash
+cd ~/pryme-server-pc && git pull && sudo bash server-agent/nas-setup.sh
+```
+1. Windows file sharing speed tuning · 2. Hard-disk health (SMART) · 3. Automatic daily backup between drives (deleted files kept in `.pryme-backup-old`) · 4. Jellyfin media server (optional)
 
 ---
 
