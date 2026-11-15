@@ -281,7 +281,7 @@ const server = http.createServer(async (req, res) => {
       const ok = authed(req), i = agent.info || {};
       const out = { configured: true, loggedIn: ok, mode: 'cloud', version: VERSION };
       if (ok) Object.assign(out, {
-        user: USER, phase: phase(), online: online(),
+        user: USER, phase: phase(), online: online(), agentVersion: (agent.info && agent.info.version) || null,
         server: { name: i.name || 'Pryme Server PC', ip: i.ip, mac: i.mac, port: 80 },
         lanUrl: i.lanUrl || null, mdnsUrl: i.mdnsUrl || null, desktop: !!i.desktop,
         waker: { online: wakerOnline(), name: waker.name },
