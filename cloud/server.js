@@ -15,7 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const VERSION = '2.0.0';
+const VERSION = '3.0.0';
 const E = process.env;
 const PORT = Number(E.PORT) || 10000;
 const USER = E.PRYME_USERNAME || '';
@@ -285,6 +285,8 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/stats') return json(res, 200, await rpc('stats'));
     if (p === '/api/list') return json(res, 200, await rpc('list', { path: u.searchParams.get('path') || '/' }));
     if (p === '/api/screen/status') return json(res, 200, await rpc('screenStatus'));
+    if (p === '/api/health') return json(res, 200, await rpc('health', {}, 40000));
+    if (p === '/api/trash') return json(res, 200, await rpc('trash'));
     if (p === '/api/screen/snap') {
       const d = await rpc('snap', {}, 15000);
       const img = Buffer.from(d.jpeg, 'base64');
@@ -293,7 +295,7 @@ const server = http.createServer(async (req, res) => {
       return res.end(img);
     }
     if (M === 'POST') {
-      const op = { '/api/mkdir': 'mkdir', '/api/rename': 'rename', '/api/delete': 'delete', '/api/input': 'input', '/api/power': 'power' }[p];
+      const op = { '/api/mkdir': 'mkdir', '/api/rename': 'rename', '/api/delete': 'delete', '/api/input': 'input', '/api/power': 'power', '/api/trash/restore': 'trashRestore', '/api/trash/empty': 'trashEmpty' }[p];
       if (op) {
         const b = await readBody(req);
         const r = await rpc(op, b);
@@ -301,7 +303,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, r);
       }
     }
-    if (['/api/download', '/api/upload', '/api/screen', '/api/walk'].includes(p))
+    if (['/api/download', '/api/upload', '/api/screen', '/api/walk', '/api/photos', '/api/thumb'].includes(p))
       return json(res, 409, { error: 'Big transfers use Fast mode — open your server on home Wi-Fi', fast: true, lanUrl: agent.info && agent.info.lanUrl });
     return json(res, 404, { error: 'Not found' });
   } catch (e) {
