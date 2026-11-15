@@ -1073,7 +1073,7 @@ function gphotosGuide() {
     <ol class="steps">
       <li><b>Connect Google Drive.</b> ${on ? '<span class="ok-txt">● Connected</span>' : `<br><button class="btn primary sm" id="gpDrive" style="margin-top:8px">Connect Google Drive</button>`}</li>
       <li><b>Open Google Takeout</b> with the same Google account.<br><a class="btn sm" href="https://takeout.google.com/" target="_blank" rel="noopener" style="margin-top:8px">${ico('open')}Open takeout.google.com</a></li>
-      <li>Press <b>Deselect all</b>, then tick only <b>Google Photos</b> → <b>Next step</b>.</li>
+      <li>Press <b>Deselect all</b>, then tick only <b>Google Photos</b>. Want only some albums? Press <b>All photo albums included</b> under it and tick just those albums. → <b>Next step</b>.</li>
       <li>Set <b>Transfer to: Add to Drive</b> · <b>Frequency: Export every 2 months for 1 year</b> · <b>File type: .zip</b> · <b>Size: 50 GB</b> → <b>Create export</b>.</li>
       <li>Google emails you when it is ready (a few hours to a day). Then press <b>Back up</b> on the Google Photos card here (or let the schedule run). Pryme unpacks the photos into <code>Cloud Backup/Google Photos</code>, album by album, and skips exports it already imported.</li>
     </ol>
@@ -1095,7 +1095,8 @@ async function jobWizard(job) {
     <nav class="crumbs" id="wzCrumbs" style="margin-top:8px"></nav>
     <div class="pick-list" id="wzList"></div>
     <div class="chips" id="wzChips"></div></div>
-    <div class="note hidden" id="wzTk" style="margin:12px 0">Backs up <b>all your Google Photos</b> from the Google Takeout exports in your Google Drive. <a href="#" id="wzTkHow">How it works</a></div>
+    <div class="note hidden" id="wzTk" style="margin:12px 0">Google Photos comes in through <b>Google Takeout</b>, so you choose <b>albums</b> on the Takeout page (press <b>All photo albums included</b> → tick only the albums you want). <a href="#" id="wzTkHow">How it works</a>
+      <div class="row-gap" style="margin-top:10px"><button class="btn sm primary" id="wzToDrive" type="button">${ico('files')}Pick folders &amp; photos from Google Drive</button></div></div>
     <div class="form-row"><label class="field"><span>Save on drive</span><select id="wzDrive">${c.drives.map(d => `<option ${d === j.drive ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></label>
     <label class="field"><span>When</span><select id="wzWhen"><option value="daily">Every day</option><option value="weekly">Every week</option><option value="manual">Only when I press Run</option></select></label></div>
     <label class="field" id="wzHourWrap"><span>Time (if the server is off then, it runs as soon as it is on)</span><select id="wzHour">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === j.hour ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('')}</select></label>
@@ -1121,6 +1122,7 @@ async function jobWizard(job) {
   const tk = () => $('#wzAcc').value === 'gphotos';
   const mode = () => { $('#wzPick').classList.toggle('hidden', tk()); $('#wzTk').classList.toggle('hidden', !tk()); if (!tk()) open(cur); };
   $('#wzTkHow').onclick = ev => { ev.preventDefault(); gphotosGuide(); };
+  $('#wzToDrive').onclick = () => { if (!conn.some(a => a.id === 'gdrive')) return toast('Connect Google Drive first', 'err'); $('#wzAcc').value = 'gdrive'; if ($('#wzName').value === 'Google Photos') $('#wzName').value = ''; $('#wzAcc').onchange(); };
   $('#wzAcc').onchange = () => { sel.clear(); chips(); cur = ''; mode(); };
   const save = async runNow => {
     $('#wzErr').textContent = '';
