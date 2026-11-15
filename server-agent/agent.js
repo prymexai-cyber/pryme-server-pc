@@ -648,6 +648,7 @@ async function health() {
     { id: 'jellyfin', name: 'Jellyfin Media', on: await svc('jellyfin'), url: ip ? `http://${ip}:8096` : null },
     { id: 'cloud', name: 'Pryme Cloud', on: !!cloudState.ok, url: cfg.cloudUrl || null },
     { id: 'wol', name: 'Wake-on-LAN', on: wol },
+    { id: 'cbackup', name: 'Cloud Backup', on: cfg.cloudJobs.length > 0, last: (() => { const l = cfg.cloudJobs.map(j => j.last).filter(Boolean).sort((a, b) => b.at - a.at)[0]; return l ? { at: l.at, ok: l.ok } : null; })() },
     { id: 'ssh', name: 'Remote Terminal (SSH)', on: (await svc('ssh')) || (await svc('ssh.socket')) },
   ];
   healthCache = { at: Date.now(), data: { disks: await diskHealth(), services } };
@@ -768,6 +769,205 @@ async function thumb(req, res, q) {
   res.end(buf);
 }
 
+/* ------------------------------------------------ cloud backup (Google Drive · OneDrive · iCloud) */
+// Uses rclone. Files are copied FROM the cloud TO a Pryme drive: <drive>/Cloud Backup/<provider>/...
+const RCLONE_CONF = process.env.PRYME_RCLONE_CONFIG || path.join(path.dirname(CONFIG_PATH), 'rclone.conf');
+const rcEnv = () => ({ ...process.env, RCLONE_CONFIG: RCLONE_CONF });
+const PROVIDERS = {
+  gdrive: { type: 'drive', label: 'Google Drive', folder: 'Google Drive', oauth: 'drive' },
+  onedrive: { type: 'onedrive', label: 'OneDrive', folder: 'OneDrive', oauth: 'onedrive' },
+  icloud: { type: 'iclouddrive', label: 'iCloud Drive', folder: 'iCloud Drive', service: 'drive' },
+  icloudphotos: { type: 'iclouddrive', label: 'iCloud Photos', folder: 'iCloud Photos', service: 'photos' },
+};
+function rc(args, { timeout = 60000, input } = {}) {
+  return new Promise(ok => {
+    const p = spawn('rclone', args, { env: rcEnv() });
+    let out = '', err = '', done = false;
+    const t = setTimeout(() => { if (!done) { p.kill(); err += '\nTimed out'; } }, timeout);
+    p.stdout.on('data', d => (out += d)); p.stderr.on('data', d => (err += d));
+    p.on('error', e => { done = true; clearTimeout(t); ok({ code: -1, out, err: e.code === 'ENOENT' ? 'rclone is not installed — run install.sh again' : e.message }); });
+    p.on('close', code => { done = true; clearTimeout(t); ok({ code, out, err }); });
+    if (input) p.stdin.end(input); else p.stdin.end();
+  });
+}
+const rcErr = r => (r.err.split('\n').map(l => l.replace(/^\d{4}\/\d\d\/\d\d \d\d:\d\d:\d\d (ERROR|NOTICE|CRITICAL) ?: ?/, '').trim()).filter(l => l && !/Config file .* not found/.test(l)).pop() || 'rclone failed');
+// Non-interactive config: answer every follow-up question with its default
+async function rcConfig(first, name) {
+  let r = await rc([...first, '--non-interactive'], { timeout: 120000 });
+  for (let i = 0; i < 12; i++) {
+    let st; try { st = JSON.parse(r.out); } catch { if (r.code) throw new HttpErr(400, rcErr(r)); return { done: true }; }
+    if (st.Error) throw new HttpErr(400, st.Error);
+    if (!st.State || !st.Option) return { done: true };
+    const o = st.Option;
+    if (o.Name === 'config_2fa') return { done: false, state: st.State, ask: '2fa', help: o.Help };
+    const ans = o.DefaultStr != null && o.DefaultStr !== '' ? o.DefaultStr : (o.Examples && o.Examples[0] ? String(o.Examples[0].Value) : (o.Default != null ? String(o.Default) : ''));
+    r = await rc(['config', 'update', name, '--continue', '--state', st.State, '--result', ans, '--non-interactive'], { timeout: 120000 });
+  }
+  return { done: true };
+}
+async function remotes() {
+  const r = await rc(['listremotes', '--long'], { timeout: 15000 });
+  const have = {};
+  for (const l of r.out.split('\n')) { const m = /^(\S+):\s+(\S+)/.exec(l.trim()); if (m) have[m[1]] = m[2]; }
+  return Object.entries(PROVIDERS).map(([id, p]) => ({ id, label: p.label, connected: !!have[id] }));
+}
+let authProc = null;
+function killAuth() { if (authProc) { try { authProc.proc.kill(); } catch {} authProc = null; } }
+async function connectStart(id) {
+  const P = PROVIDERS[id]; if (!P || !P.oauth) throw new HttpErr(400, 'Unknown account type');
+  killAuth();
+  const proc = spawn('rclone', ['authorize', P.oauth, '--auth-no-open-browser'], { env: rcEnv() });
+  authProc = { id, proc, out: '' };
+  const add = d => { if (authProc && authProc.proc === proc) authProc.out += d; };
+  proc.stdout.on('data', add); proc.stderr.on('data', add);
+  proc.on('error', () => {});
+  setTimeout(() => { if (authProc && authProc.proc === proc) killAuth(); }, 15 * 60e3).unref();
+  let local = null;
+  for (let i = 0; i < 100 && !local; i++) { await sleep(100); const m = /http:\/\/127\.0\.0\.1:53682\/auth\?state=[\w-]+/.exec(authProc ? authProc.out : ''); if (m) local = m[0]; }
+  if (!local) { const o = authProc ? authProc.out : ''; killAuth(); throw new HttpErr(500, /not found|ENOENT/.test(o) ? 'rclone is not installed' : 'Could not start sign-in'); }
+  const loc = await new Promise((ok, bad) => http.get(local, r => { r.resume(); ok(r.headers.location); }).on('error', bad));
+  if (!loc) throw new HttpErr(500, 'Could not get the sign-in link');
+  return { authUrl: loc };
+}
+async function connectFinish(id, pasted) {
+  if (!authProc || authProc.id !== id) throw new HttpErr(400, 'Sign-in expired — press Connect again');
+  let u; try { u = new URL(String(pasted || '').trim()); } catch { throw new HttpErr(400, 'Paste the full address (it starts with http://127.0.0.1:53682/ or http://localhost:53682/)'); }
+  if (!/^(127\.0\.0\.1|localhost)$/.test(u.hostname) || u.port !== '53682' || !u.searchParams.get('code')) throw new HttpErr(400, 'That is not the right address. Copy the address of the page that says "This site can\'t be reached".');
+  const target = `http://127.0.0.1:53682${u.pathname}${u.search}`;
+  await new Promise(ok => http.get(target, r => { r.resume(); r.on('end', ok); }).on('error', ok));
+  let token = null;
+  for (let i = 0; i < 300 && !token; i++) {
+    await sleep(100);
+    const o = authProc ? authProc.out : '';
+    const m = /--->\s*(\{[\s\S]*?\})\s*<---/.exec(o);
+    if (m) token = m[1].trim();
+    else if (!authProc || authProc.proc.exitCode !== null) break;
+  }
+  const out = authProc ? authProc.out : ''; killAuth();
+  if (!token) throw new HttpErr(400, 'Sign-in failed: ' + ((/(?:ERROR|Failed)[^\n]*/i.exec(out) || [])[0] || 'no token received — try again'));
+  await rc(['config', 'delete', id], { timeout: 15000 });
+  await rcConfig(['config', 'create', id, PROVIDERS[id].type, 'token', token], id);
+  return { ok: true };
+}
+let icloudPending = null;
+async function icloudStart(id, appleId, password) {
+  const P = PROVIDERS[id]; if (!P || P.type !== 'iclouddrive') throw new HttpErr(400, 'Unknown account type');
+  if (!appleId || !password) throw new HttpErr(400, 'Apple ID and password are required');
+  await rc(['config', 'delete', id], { timeout: 15000 });
+  const args = ['config', 'create', id, 'iclouddrive', 'apple_id', String(appleId), 'password', String(password)];
+  if (P.service === 'photos') args.push('service', 'photos');
+  args.push('--obscure');
+  const r = await rcConfig(args, id);
+  if (!r.done) { icloudPending = { id, state: r.state }; return { ok: true, needCode: true }; }
+  return { ok: true };
+}
+async function icloudCode(id, code) {
+  if (!icloudPending || icloudPending.id !== id) throw new HttpErr(400, 'Start again — the code request expired');
+  const st = icloudPending.state; icloudPending = null;
+  const r = await rcConfig(['config', 'update', id, '--continue', '--state', st, '--result', String(code || '').trim()], id);
+  if (!r.done) { icloudPending = { id, state: r.state }; return { ok: true, needCode: true }; }
+  return { ok: true };
+}
+async function browse(id, p) {
+  if (!PROVIDERS[id]) throw new HttpErr(400, 'Unknown account');
+  const clean = String(p || '').replace(/^\/+|\/+$/g, '');
+  const r = await rc(['lsjson', `${id}:${clean}`, '--max-depth', '1', '--no-mimetype'], { timeout: 90000 });
+  if (r.code) throw new HttpErr(502, rcErr(r));
+  let items = []; try { items = JSON.parse(r.out || '[]'); } catch {}
+  return { path: clean, items: items.map(i => ({ name: i.Name, dir: i.IsDir, size: i.Size, mtime: Date.parse(i.ModTime) || 0 })).sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name)) };
+}
+// ---- backup jobs ----
+cfg.cloudJobs = Array.isArray(cfg.cloudJobs) ? cfg.cloudJobs : [];
+const running = new Map();
+const saveCfg = () => { try { saveConfig(cfg); } catch (e) { console.warn('config save:', e.message); } };
+function jobDest(j, item) {
+  const base = path.join(ROOT, j.drive, 'Cloud Backup', PROVIDERS[j.remote].folder);
+  return item.dir ? path.join(base, ...item.path.split('/')) : path.join(base, ...path.posix.dirname(item.path).split('/').filter(x => x && x !== '.'));
+}
+async function runJob(id) {
+  const j = cfg.cloudJobs.find(x => x.id === id);
+  if (!j) throw new HttpErr(404, 'Backup not found');
+  if (running.has(id)) return { ok: true, already: true };
+  if (!(await driveList()).some(d => d.name === j.drive)) throw new HttpErr(400, 'Destination drive is not connected');
+  const run = { started: Date.now(), bytes: 0, total: 0, files: 0, totalFiles: 0, speed: 0, item: 0, proc: null, stop: false, errors: 0 };
+  running.set(id, run);
+  (async () => {
+    let ok = true, msg = 'Done';
+    for (let i = 0; i < j.items.length && !run.stop; i++) {
+      const it = j.items[i]; run.item = i;
+      const dest = jobDest(j, it); fs.mkdirSync(dest, { recursive: true });
+      const src = `${j.remote}:${it.path}`;
+      const r = await new Promise(done => {
+        const p = spawn('rclone', ['copy', src, dest, '--stats', '2s', '--stats-log-level', 'NOTICE', '--use-json-log', '-v', '--transfers', '3', '--retries', '3', '--create-empty-src-dirs'], { env: rcEnv() });
+        run.proc = p; let lastErr = '', base = { b: run.bytes, f: run.files };
+        const onLine = l => {
+          let o; try { o = JSON.parse(l); } catch { return; }
+          if (o.stats) { run.bytes = base.b + (o.stats.bytes || 0); run.total = Math.max(run.total, base.b + (o.stats.totalBytes || 0)); run.files = base.f + (o.stats.transfers || 0); run.totalFiles = Math.max(run.totalFiles, base.f + (o.stats.totalTransfers || 0)); run.speed = o.stats.speed || 0; run.errors += 0; }
+          if (o.level === 'error') lastErr = o.msg;
+        };
+        let buf = '';
+        p.stderr.on('data', d => { buf += d; let k; while ((k = buf.indexOf('\n')) >= 0) { onLine(buf.slice(0, k)); buf = buf.slice(k + 1); } });
+        p.on('error', e => done({ code: -1, err: e.code === 'ENOENT' ? 'rclone is not installed' : e.message }));
+        p.on('close', code => done({ code, err: lastErr }));
+      });
+      if (r.code) { ok = false; msg = r.err || 'Some files could not be copied'; }
+    }
+    if (run.stop) { ok = false; msg = 'Stopped'; }
+    j.last = { at: Date.now(), ok, msg, bytes: run.bytes, files: run.files, took: Date.now() - run.started };
+    running.delete(id); saveCfg(); photoCache.at = 0;
+  })();
+  return { ok: true };
+}
+setInterval(() => {
+  const now = Date.now(), h = new Date().getHours();
+  for (const j of cfg.cloudJobs) {
+    if (j.schedule === 'manual' || running.has(j.id)) continue;
+    const gap = now - ((j.last && j.last.at) || 0), day = 864e5;
+    const due = j.schedule === 'weekly' ? gap > 7 * day - 3600e3 && (h >= (j.hour ?? 2) || gap > 8 * day)
+      : gap > day - 3600e3 && (h >= (j.hour ?? 2) || gap > 2 * day);
+    if (due) runJob(j.id).catch(() => {});
+  }
+}, 60000).unref();
+const jobView = j => { const r = running.get(j.id); return { ...j, label: PROVIDERS[j.remote] ? PROVIDERS[j.remote].label : j.remote, running: r ? { bytes: r.bytes, total: r.total, files: r.files, totalFiles: r.totalFiles, speed: r.speed, item: r.item, started: r.started } : null }; };
+async function cloudOp(b) {
+  switch (b.action) {
+    case 'status': {
+      const v = await rc(['version'], { timeout: 10000 });
+      const ver = (/rclone v([\d.]+)/.exec(v.out) || [])[1] || null;
+      return { rclone: ver, icloud: ver ? ver.split('.').map(Number).reduce((a, n, i) => a + n * [10000, 100, 1][i], 0) >= 16900 : false,
+        accounts: ver ? await remotes() : [], jobs: cfg.cloudJobs.map(jobView), drives: (await driveList()).map(d => d.name) };
+    }
+    case 'connectStart': return connectStart(b.id);
+    case 'connectFinish': return connectFinish(b.id, b.url);
+    case 'icloudStart': return icloudStart(b.id, b.appleId, b.password);
+    case 'icloudCode': return icloudCode(b.id, b.code);
+    case 'disconnect': {
+      if (!PROVIDERS[b.id]) throw new HttpErr(400, 'Unknown account');
+      await rc(['config', 'delete', b.id], { timeout: 15000 });
+      return { ok: true };
+    }
+    case 'browse': return browse(b.id, b.path);
+    case 'jobSave': {
+      const j = b.job || {};
+      if (!PROVIDERS[j.remote]) throw new HttpErr(400, 'Choose an account');
+      const items = (Array.isArray(j.items) ? j.items : []).map(i => ({ path: String(i.path || '').replace(/^\/+|\/+$/g, ''), dir: !!i.dir })).filter(i => i.path || i.dir);
+      if (!items.length) throw new HttpErr(400, 'Choose at least one folder or file');
+      if (!(await driveList()).some(d => d.name === j.drive)) throw new HttpErr(400, 'Choose a destination drive');
+      const job = { id: j.id || crypto.randomBytes(5).toString('hex'), name: String(j.name || PROVIDERS[j.remote].label + ' backup').slice(0, 60), remote: j.remote, items,
+        drive: j.drive, schedule: ['daily', 'weekly', 'manual'].includes(j.schedule) ? j.schedule : 'daily', hour: Math.min(23, Math.max(0, Number(j.hour) || 2)) };
+      const old = cfg.cloudJobs.findIndex(x => x.id === job.id);
+      if (old >= 0) { job.last = cfg.cloudJobs[old].last; cfg.cloudJobs[old] = job; } else cfg.cloudJobs.push(job);
+      saveCfg();
+      if (b.runNow) runJob(job.id).catch(() => {});
+      return { ok: true, id: job.id };
+    }
+    case 'jobDelete': { const r = running.get(b.id); if (r) { r.stop = true; try { r.proc.kill(); } catch {} } cfg.cloudJobs = cfg.cloudJobs.filter(x => x.id !== b.id); saveCfg(); return { ok: true }; }
+    case 'jobRun': return runJob(b.id);
+    case 'jobStop': { const r = running.get(b.id); if (r) { r.stop = true; try { r.proc.kill(); } catch {} } return { ok: true }; }
+    default: throw new HttpErr(400, 'Unknown action');
+  }
+}
+
 /* --------------------------------------- operations (LAN + Pryme Cloud) */
 const OPS = {
   async mkdir(b) {
@@ -800,6 +1000,7 @@ const OPS = {
   trashRestore: b => trashRestore(Array.isArray(b.ids) ? b.ids : []),
   trashEmpty: b => trashEmpty(Array.isArray(b.ids) ? b.ids : null),
   photos: b => photos(b),
+  cloud: b => cloudOp(b || {}),
   async input(b) {
     const evs = Array.isArray(b.events) ? b.events : [];
     const job = inputChain.then(() => runInput(evs));
@@ -923,6 +1124,7 @@ const handler = async (req, res) => {
 
     if (M === 'POST') {
       const b = await readBody(req);
+      if (p === '/api/cloud') return json(res, 200, await cloudOp(b));
       const op = { '/api/mkdir': 'mkdir', '/api/rename': 'rename', '/api/delete': 'delete', '/api/input': 'input', '/api/trash/restore': 'trashRestore', '/api/trash/empty': 'trashEmpty' }[p];
       if (op) return json(res, 200, await OPS[op](b));
       if (p === '/api/power') {
