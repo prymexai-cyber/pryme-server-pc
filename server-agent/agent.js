@@ -19,7 +19,7 @@ const crypto = require('crypto');
 const dgram = require('dgram');
 const { spawn, execFile } = require('child_process');
 
-const VERSION = '2.0.0';
+const VERSION = '3.0.0';
 const CONFIG_PATH = process.env.PRYME_CONFIG || '/etc/pryme/config.json';
 const BEACON_PORT = 7101;
 const DRY = process.env.PRYME_DRYRUN === '1';
@@ -240,7 +240,7 @@ const mime = n => MIME[path.extname(n).slice(1).toLowerCase()] || 'application/o
 async function list(q) {
   const { v, real } = vpath(q.get('path'));
   const ents = await fsp.readdir(real, { withFileTypes: true });
-  const items = await Promise.all(ents.filter(e => !e.name.endsWith('.pryme-part')).map(async e => {
+  const items = await Promise.all(ents.filter(e => !e.name.endsWith('.pryme-part') && e.name !== '.pryme-trash').map(async e => {
     try {
       const s = await fsp.stat(path.join(real, e.name));
       return { name: e.name, dir: s.isDirectory(), size: s.isDirectory() ? 0 : s.size, mtime: s.mtimeMs, hidden: e.name.startsWith('.') };
@@ -261,8 +261,8 @@ async function download(req, res, q) {
   if (st.isDirectory()) {
     // folders stream as one archive (no compression = full speed)
     res.writeHead(200, { 'Content-Type': asZip ? 'application/zip' : 'application/x-tar', 'Content-Disposition': disp });
-    const t = asZip ? spawn('zip', ['-r', '-0', '-q', '-', name], { cwd: path.dirname(real) })
-                    : spawn('tar', ['-C', path.dirname(real), '-cf', '-', name]);
+    const t = asZip ? spawn('zip', ['-r', '-0', '-q', '-', name, '-x', '*/.pryme-trash/*', '*.pryme-part'], { cwd: path.dirname(real) })
+                    : spawn('tar', ['-C', path.dirname(real), '--exclude=.pryme-trash', '--exclude=*.pryme-part', '-cf', '-', name]);
     t.stdout.pipe(res);
     res.on('close', () => t.kill());
     return;
@@ -296,7 +296,7 @@ async function walk(q) {
   async function rec(dReal, dV, rel) {
     const ents = await fsp.readdir(dReal, { withFileTypes: true }).catch(() => []);
     for (const e of ents) {
-      if (e.name.endsWith('.pryme-part')) continue;
+      if (e.name.endsWith('.pryme-part') || e.name === TRASH) continue;
       const r = rel + '/' + e.name, pv = (dV === '/' ? '' : dV) + '/' + e.name, pr = path.join(dReal, e.name);
       if (e.isDirectory()) { dirs.push(r); await rec(pr, pv, r); }
       else if (e.isFile()) {
@@ -319,7 +319,7 @@ async function upload(req, res, q) {
   if (!target.startsWith(ROOT + path.sep)) throw new HttpErr(400, 'Bad path');
   await fsp.mkdir(path.dirname(target), { recursive: true });
   const tmp = path.join(path.dirname(target), '.' + path.basename(target) + '.pryme-part');
-  const ws = fs.createWriteStream(tmp, { highWaterMark: 1 << 20 });
+  const ws = fs.createWriteStream(tmp, { highWaterMark: 1 << 20, flush: true }); // flush = fsync before the file is renamed into place (power-cut safe)
   try {
     await new Promise((ok, bad) => {
       req.pipe(ws);
@@ -328,6 +328,7 @@ async function upload(req, res, q) {
       ws.on('finish', ok);
     });
     await fsp.rename(tmp, target);
+    photoCache.at = 0;
   } catch (e) {
     await fsp.unlink(tmp).catch(() => {});
     throw e;
@@ -569,6 +570,204 @@ async function localRoute(req, res, p, M) {
   return json(res, 404, { error: 'Not found' });
 }
 
+/* ------------------------------------------------ power-cut safety */
+// Durable write: data reaches the disk before we continue (survives a power cut)
+function writeDurable(f, data) {
+  const tmp = f + '.tmp', fd = fs.openSync(tmp, 'w');
+  try { fs.writeSync(fd, data); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  fs.renameSync(tmp, f);
+}
+const STATE_DIR = process.env.PRYME_STATE_DIR || '/var/lib/pryme';
+fs.mkdirSync(STATE_DIR, { recursive: true });
+const STATE_FILE = path.join(STATE_DIR, 'state.json');
+const BOOT_ID = (() => { try { return fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(); } catch { return 'unknown'; } })();
+let pstate = {};
+try { pstate = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch {}
+const safety = { powercuts: Array.isArray(pstate.powercuts) ? pstate.powercuts : [], recovered: null };
+// A new boot whose previous boot never shut down cleanly = power cut / hard reset
+if (pstate.bootId && pstate.bootId !== BOOT_ID && pstate.clean === false) {
+  const ev = { at: pstate.lastSeen || null, back: Date.now() - os.uptime() * 1000 };
+  safety.powercuts.unshift(ev); safety.powercuts = safety.powercuts.slice(0, 30); safety.recovered = ev;
+  console.warn('⚠ Previous shutdown was NOT clean (power cut or hard reset). Disks were auto-checked at boot.');
+}
+function saveState(clean) {
+  try { writeDurable(STATE_FILE, JSON.stringify({ bootId: BOOT_ID, clean, lastSeen: Date.now(), powercuts: safety.powercuts })); } catch {}
+}
+saveState(false);
+setInterval(() => saveState(false), 60000).unref();
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => {
+  saveState(true);
+  try { if (screen.proc) screen.proc.kill(); } catch {}
+  process.exit(0);
+});
+
+const run = (cmd, args, timeout = 8000) => new Promise(ok => execFile(cmd, args, { timeout, maxBuffer: 8e6 }, (e, so) => ok(e && !so ? '' : String(so || ''))));
+const readNum = f => { try { return Number(fs.readFileSync(f, 'utf8').trim()); } catch { return null; } };
+
+/* ------------------------------------------------ disk health (SMART) */
+let healthCache = { at: 0, data: null };
+async function diskHealth() {
+  let tree = [];
+  try { tree = JSON.parse(await run('lsblk', ['-J', '-b', '-o', 'NAME,TYPE,SIZE,MODEL,TRAN,ROTA,MOUNTPOINTS'])).blockdevices || []; } catch {}
+  const out = [];
+  for (const d of tree) {
+    if (d.type !== 'disk' || /^(loop|zram|sr|ram)/.test(d.name)) continue;
+    const mounts = [];
+    (function walkm(n) { for (const m of n.mountpoints || []) if (m) mounts.push(m); for (const c of n.children || []) walkm(c); })(d);
+    let j = null;
+    for (const extra of [[], ['-d', 'sat']]) {
+      try { const t = await run('smartctl', ['-j', '-a', ...extra, '/dev/' + d.name], 15000); const p = JSON.parse(t); if (p.smart_status || p.ata_smart_attributes || p.nvme_smart_health_information_log) { j = p; break; } } catch {}
+    }
+    const attr = id => { const a = j && j.ata_smart_attributes && j.ata_smart_attributes.table && j.ata_smart_attributes.table.find(x => x.id === id); return a ? Number(a.raw && a.raw.value) : null; };
+    const nv = j && j.nvme_smart_health_information_log;
+    const realloc = attr(5), pending = attr(197);
+    const passed = j && j.smart_status ? j.smart_status.passed : null;
+    const status = !j ? 'unknown' : passed === false ? 'failing' : (realloc > 0 || pending > 0) ? 'warning' : 'healthy';
+    out.push({
+      dev: d.name, model: (j && j.model_name) || d.model || 'Disk', size: Number(d.size) || 0, usb: d.tran === 'usb', ssd: d.rota === false || d.rota === '0',
+      status, temp: j && j.temperature ? j.temperature.current : null, hours: j && j.power_on_time ? j.power_on_time.hours : null,
+      cycles: j ? j.power_cycle_count ?? null : null, unsafe: nv ? nv.unsafe_shutdowns : (attr(192) ?? attr(174)),
+      realloc, pending, system: mounts.includes('/'), mounts,
+    });
+  }
+  return out;
+}
+async function svc(name) { return (await run('systemctl', ['is-active', name], 3000)).trim() === 'active'; }
+async function health() {
+  if (healthCache.data && Date.now() - healthCache.at < 90000) return { ...healthCache.data, safety: safetyInfo() };
+  const n = netInfo(), ip = n ? n.ip : '';
+  let wol = null;
+  if (n) { const t = await run('ethtool', [n.iface], 3000); const m = /Wake-on:\s*(\w+)/.exec(t.split('Supports Wake-on')[1] || t); wol = m ? m[1].includes('g') : null; }
+  let backupLast = null;
+  const bshow = await run('systemctl', ['show', 'pryme-backup.service', '-p', 'ExecMainExitTimestamp', '-p', 'ExecMainStatus'], 3000);
+  const ts = /ExecMainExitTimestamp=(.+)/.exec(bshow); if (ts && ts[1].trim()) backupLast = { at: Date.parse(ts[1].trim().replace(/ \+?\w+$/, '')) || null, ok: /ExecMainStatus=0/.test(bshow) };
+  const services = [
+    { id: 'samba', name: 'Windows File Sharing', on: await svc('smbd'), url: ip ? `\\\\${ip}\\Pryme` : null },
+    { id: 'smart', name: 'Disk Health Monitor', on: (await svc('smartmontools')) || (await svc('smartd')) },
+    { id: 'backup', name: 'Daily Backup', on: await svc('pryme-backup.timer'), last: backupLast },
+    { id: 'jellyfin', name: 'Jellyfin Media', on: await svc('jellyfin'), url: ip ? `http://${ip}:8096` : null },
+    { id: 'cloud', name: 'Pryme Cloud', on: !!cloudState.ok, url: cfg.cloudUrl || null },
+    { id: 'wol', name: 'Wake-on-LAN', on: wol },
+    { id: 'ssh', name: 'Remote Terminal (SSH)', on: (await svc('ssh')) || (await svc('ssh.socket')) },
+  ];
+  healthCache = { at: Date.now(), data: { disks: await diskHealth(), services } };
+  return { ...healthCache.data, safety: safetyInfo() };
+}
+function safetyInfo() {
+  let cmd = ''; try { cmd = fs.readFileSync('/proc/cmdline', 'utf8'); } catch {}
+  let mounts = []; try { mounts = fs.readFileSync('/proc/mounts', 'utf8').split('\n').map(l => l.split(' ')).filter(f => f[1] && (f[1] === '/' || f[1].startsWith(ROOT + '/'))).map(f => ({ mount: f[1].replace(/\\040/g, ' '), fs: f[2] })); } catch {}
+  const journaled = mounts.filter(m => ['ext4', 'btrfs', 'xfs', 'zfs', 'f2fs'].includes(m.fs)).length;
+  const checks = [
+    { id: 'journal', label: 'Crash-safe file systems', ok: mounts.length > 0 && journaled === mounts.length, info: mounts.map(m => `${m.mount === '/' ? 'System' : path.basename(m.mount)}: ${m.fs}`).join(' · ') || '—' },
+    { id: 'flush', label: 'Fast flush to disk (≤3 s)', ok: (readNum('/proc/sys/vm/dirty_expire_centisecs') || 3000) <= 500 },
+    { id: 'fsck', label: 'Auto-repair disks after a power cut', ok: /fsck\.repair=yes/.test(cmd) },
+    { id: 'atomic', label: 'Safe uploads (no half-written files)', ok: true },
+    { id: 'cache', label: 'Extra-safe disk write cache', ok: fs.existsSync('/etc/systemd/system/pryme-safe-cache.service'), optional: true },
+  ];
+  const ok = checks.filter(c => !c.optional && c.ok).length, total = checks.filter(c => !c.optional).length;
+  return { checks, score: Math.round(ok / total * 100), powercuts: safety.powercuts, recovered: safety.recovered, ups: false };
+}
+
+/* ------------------------------------------------ recycle bin */
+const TRASH = '.pryme-trash';
+async function dirSize(p) {
+  let total = 0, n = 0;
+  async function rec(d) { for (const e of await fsp.readdir(d, { withFileTypes: true }).catch(() => [])) { if (++n > 100000) return; const f = path.join(d, e.name); if (e.isDirectory()) await rec(f); else { const s = await fsp.lstat(f).catch(() => null); if (s) total += s.size; } } }
+  await rec(p); return total;
+}
+async function moveToTrash(v) {
+  const { v: vp, real } = vpath(v);
+  const seg = vp.split('/').filter(Boolean);
+  if (seg.length < 2) throw new HttpErr(400, 'Drives cannot be deleted');
+  if (seg.includes(TRASH)) return fsp.rm(real, { recursive: true, force: true });
+  const st = await fsp.lstat(real);
+  const tdir = path.join(ROOT, seg[0], TRASH), id = Date.now().toString(36) + crypto.randomBytes(3).toString('hex');
+  await fsp.mkdir(path.join(tdir, id), { recursive: true });
+  const size = st.isDirectory() ? await dirSize(real) : st.size;
+  await fsp.rename(real, path.join(tdir, id, path.basename(real)));
+  writeDurable(path.join(tdir, id + '.json'), JSON.stringify({ id, name: path.basename(real), from: vp, drive: seg[0], at: Date.now(), size, dir: st.isDirectory() }));
+}
+async function trashItems() {
+  const items = [];
+  for (const d of await driveList()) {
+    const tdir = path.join(ROOT, d.name, TRASH);
+    for (const f of await fsp.readdir(tdir).catch(() => [])) {
+      if (!f.endsWith('.json')) continue;
+      try { items.push(JSON.parse(await fsp.readFile(path.join(tdir, f), 'utf8'))); } catch {}
+    }
+  }
+  return items.sort((a, b) => b.at - a.at);
+}
+async function trashRemove(it) {
+  const tdir = path.join(ROOT, it.drive, TRASH);
+  await fsp.rm(path.join(tdir, it.id), { recursive: true, force: true });
+  await fsp.rm(path.join(tdir, it.id + '.json'), { force: true });
+}
+async function trashRestore(ids) {
+  const all = await trashItems(); let n = 0;
+  for (const it of all.filter(x => ids.includes(x.id))) {
+    let { real: target } = vpath(it.from);
+    if (fs.existsSync(target)) { const ext = path.extname(target); target = target.slice(0, target.length - ext.length) + ' (restored)' + ext; }
+    await fsp.mkdir(path.dirname(target), { recursive: true });
+    await fsp.rename(path.join(ROOT, it.drive, TRASH, it.id, it.name), target);
+    await trashRemove(it); n++;
+  }
+  return { ok: true, restored: n };
+}
+async function trashEmpty(ids) {
+  const all = await trashItems(); let n = 0;
+  for (const it of all.filter(x => !ids || ids.includes(x.id))) { await trashRemove(it); n++; }
+  return { ok: true, deleted: n };
+}
+// Items older than 30 days are removed automatically
+setInterval(async () => { const old = (await trashItems()).filter(i => Date.now() - i.at > 30 * 864e5).map(i => i.id); if (old.length) trashEmpty(old); }, 6 * 3600e3).unref();
+
+/* ------------------------------------------------ photos */
+const IMG_RE = /\.(jpe?g|png|gif|webp|bmp)$/i;
+let photoCache = { key: '', at: 0, data: null };
+async function photos(b) {
+  const { v, real } = vpath(b.path || '/');
+  if (photoCache.key === v && Date.now() - photoCache.at < 60000) return photoCache.data;
+  const out = []; let seen = 0;
+  async function rec(dReal, dV) {
+    for (const e of await fsp.readdir(dReal, { withFileTypes: true }).catch(() => [])) {
+      if (e.name.startsWith('.') || ++seen > 300000 || out.length >= 5000) continue;
+      const pr = path.join(dReal, e.name), pv = (dV === '/' ? '' : dV) + '/' + e.name;
+      if (e.isDirectory()) await rec(pr, pv);
+      else if (IMG_RE.test(e.name)) { const s = await fsp.stat(pr).catch(() => null); if (s && s.size > 2048) out.push({ path: pv, name: e.name, size: s.size, mtime: s.mtimeMs, folder: dV }); }
+    }
+  }
+  await rec(real, v);
+  out.sort((a, b2) => b2.mtime - a.mtime);
+  photoCache = { key: v, at: Date.now(), data: { path: v, photos: out, total: out.length } };
+  return photoCache.data;
+}
+const THUMB_DIR = path.join(STATE_DIR, 'thumbs');
+fs.mkdirSync(THUMB_DIR, { recursive: true });
+let thumbBusy = 0; const thumbWait = [];
+const thumbSlot = () => new Promise(r => { if (thumbBusy < 2) { thumbBusy++; r(); } else thumbWait.push(r); });
+const thumbDone = () => { const n = thumbWait.shift(); if (n) n(); else thumbBusy--; };
+async function thumb(req, res, q) {
+  const { real } = vpath(q.get('path'));
+  const st = await fsp.stat(real).catch(() => null);
+  if (!st || !st.isFile()) throw new HttpErr(404, 'Not found');
+  const w = Math.min(800, Math.max(64, Number(q.get('w')) || 360));
+  const key = crypto.createHash('sha1').update(real + '|' + st.mtimeMs + '|' + w).digest('hex');
+  const out = path.join(THUMB_DIR, key.slice(0, 2), key + '.jpg');
+  if (!fs.existsSync(out)) {
+    await fsp.mkdir(path.dirname(out), { recursive: true });
+    await thumbSlot();
+    try {
+      await new Promise(ok => execFile('ffmpeg', ['-loglevel', 'error', '-y', '-i', real, '-vf', `scale='min(${w},iw)':-2`, '-frames:v', '1', '-q:v', '5', out + '.tmp.jpg'], { timeout: 20000 }, () => ok()));
+      if (fs.existsSync(out + '.tmp.jpg')) fs.renameSync(out + '.tmp.jpg', out);
+    } finally { thumbDone(); }
+  }
+  if (!fs.existsSync(out)) { res.writeHead(302, { Location: '/api/download?inline=1&path=' + encodeURIComponent(q.get('path')) }); return res.end(); }
+  const buf = await fsp.readFile(out);
+  res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': buf.length, 'Cache-Control': 'private, max-age=86400' });
+  res.end(buf);
+}
+
 /* --------------------------------------- operations (LAN + Pryme Cloud) */
 const OPS = {
   async mkdir(b) {
@@ -590,10 +789,17 @@ const OPS = {
     for (const x of paths) {
       const { v, real } = vpath(x);
       if (v.split('/').length <= 2) throw new HttpErr(400, 'Drives cannot be deleted');
-      await fsp.rm(real, { recursive: true, force: true });
+      if (b.permanent) await fsp.rm(real, { recursive: true, force: true });
+      else await moveToTrash(v);
     }
-    return { ok: true, deleted: paths.length };
+    photoCache.at = 0;
+    return { ok: true, deleted: paths.length, trash: !b.permanent };
   },
+  health: () => health(),
+  trash: async () => { const items = await trashItems(); return { items, size: items.reduce((a, i) => a + (i.size || 0), 0) }; },
+  trashRestore: b => trashRestore(Array.isArray(b.ids) ? b.ids : []),
+  trashEmpty: b => trashEmpty(Array.isArray(b.ids) ? b.ids : null),
+  photos: b => photos(b),
   async input(b) {
     const evs = Array.isArray(b.events) ? b.events : [];
     const job = inputChain.then(() => runInput(evs));
@@ -699,6 +905,10 @@ const handler = async (req, res) => {
     }
 
     if (p === '/api/stats') return json(res, 200, await stats());
+    if (p === '/api/health') return json(res, 200, await health());
+    if (p === '/api/trash') return json(res, 200, await OPS.trash());
+    if (p === '/api/photos') return json(res, 200, await photos({ path: q.get('path') || '/' }));
+    if (p === '/api/thumb') return await thumb(req, res, q);
     if (p === '/api/list') return json(res, 200, await list(q));
     if (p === '/api/walk') return json(res, 200, await walk(q));
     if (p === '/api/download' && (M === 'GET' || M === 'HEAD')) return await download(req, res, q);
@@ -713,7 +923,7 @@ const handler = async (req, res) => {
 
     if (M === 'POST') {
       const b = await readBody(req);
-      const op = { '/api/mkdir': 'mkdir', '/api/rename': 'rename', '/api/delete': 'delete', '/api/input': 'input' }[p];
+      const op = { '/api/mkdir': 'mkdir', '/api/rename': 'rename', '/api/delete': 'delete', '/api/input': 'input', '/api/trash/restore': 'trashRestore', '/api/trash/empty': 'trashEmpty' }[p];
       if (op) return json(res, 200, await OPS[op](b));
       if (p === '/api/power') {
         const action = b.action === 'restart' ? 'restart' : 'shutdown';
